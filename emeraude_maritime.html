@@ -4415,12 +4415,17 @@ const EmeraudeCore = (() => {
   // Adresse du relais : lien « …#/drive?r=<adresse> » (un ancien « &t=<code> » est ignoré : l'accès
   // passe désormais par le compte Google), ou l'adresse /exec collée telle quelle
   const RELAY_URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(exec|dev)$/;
+  // Tolère ce que donne un copier-coller : espaces, « /u/0/ » (plusieurs comptes Google
+  // connectés), sans « https:// », barre finale, ou l'identifiant de déploiement seul (AKfycb…).
   function parseDriveLink(text) {
-    const s = String(text || '').trim();
-    const m = /[#?&]r=([^&\s]+)/.exec(s);
-    let url = '';
-    if (m) { try { url = decodeURIComponent(m[1]); } catch (e) { return null; } }
-    else url = (/https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(?:exec|dev)(?![\w-])/.exec(s) || [''])[0];
+    const raw = String(text || '');
+    const m = /[#?&]r=([^&\s]+)/.exec(raw);
+    let s;
+    if (m) { try { s = decodeURIComponent(m[1]); } catch (e) { return null; } }
+    else s = raw.replace(/\s+/g, '');   // adresse collée seule : peut être coupée par un retour à la ligne
+    s = s.replace(/\/macros\/u\/\d+\/s\//, '/macros/s/').replace(/^(?:https?:\/\/)?(?=script\.google\.com\/)/, 'https://');
+    let url = (/https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(?:exec|dev)(?![\w-])/.exec(s) || [''])[0];
+    if (!url && /^AKfycb[\w-]{20,}$/.test(s)) url = 'https://script.google.com/macros/s/' + s + '/exec';
     const k = RELAY_URL_RE.exec(url);
     return k ? { url, dev: k[1] === 'dev' } : null;
   }
@@ -8723,7 +8728,13 @@ function gdStopOtherSyncs() {
 // Adresse du relais collée ou lien ouvert : vérification de l'adresse, puis connexion Google
 async function gdConnectLink(text) {
   const link = EmeraudeCore.parseDriveLink(text);
-  if (!link) { alert('Adresse du relais non reconnue : elle commence par https://script.google.com/macros/s/ et se termine par /exec (journal de installer() dans le script du relais).'); return; }
+  if (!link) {
+    const s = String(text || '').trim();
+    alert(!s ? 'Collez d’abord l’adresse du relais dans le champ, puis cliquez sur « Se connecter avec Google ».'
+      : /googleusercontent\.com/.test(s) ? 'C’est l’adresse affichée APRÈS ouverture du relais dans le navigateur (script.googleusercontent.com) : elle ne convient pas.\n\nCopiez celle qui se termine par /exec (Déployer › Gérer les déploiements › « Application Web »).'
+      : 'Adresse du relais non reconnue. Reçu : « ' + s.slice(0, 90) + (s.length > 90 ? '…' : '') + ' »\n\nAttendu : https://script.google.com/macros/s/…/exec (Déployer › Gérer les déploiements › « Application Web »).');
+    return;
+  }
   if (link.dev) {
     const u = (prompt('C’est l’adresse de TEST du relais (elle se termine par /dev) : elle ne fonctionne que dans l’éditeur de script.\n\n' +
       'Dans script.google.com : Déployer › Gérer les déploiements › « Application Web » › copiez l’URL qui se termine par /exec et collez-la ici :') || '').trim();
@@ -8807,7 +8818,7 @@ function gdSettingsCard(btnPri, btnSec) {
     ${old ? `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Relais en version ${GD.relayVersion} : version ${GD_RELAY_EXPECTED} attendue — redéployez-le (relais/deployer-relais.ps1).</div>` : ''}
     ${on ? `<div style="font-size:0.62rem;color:var(--text-4);margin-bottom:10px;word-break:break-all">${a.email ? 'Compte Google : <strong>' + impEsc(a.email) + '</strong> · ' : ''}Relais : ${impEsc(a.url)}${GD.relayVersion != null ? ' · version ' + GD.relayVersion : ''}</div>` : `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <input id="gd-link" class="form-input" autocomplete="off" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Adresse du relais (https://script.google.com/macros/s/…/exec) ou lien de connexion" />
+      <input id="gd-link" class="form-input" autocomplete="off" value="${impEsc(GD.linkDraft || '')}" oninput="GD.linkDraft = this.value" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Adresse du relais (https://script.google.com/macros/s/…/exec) ou lien de connexion" />
       <button onclick="gdConnectLink(document.getElementById('gd-link').value)" style="${btnPri};padding:8px 14px;font-size:0.75rem" ${odSecureContext() ? '' : 'disabled title="Ouvrez l’application en ligne ou installée"'}>Se connecter avec Google</button>
     </div>
     ${odSecureContext() ? '' : `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Fichier ouvert depuis le PC : la connexion Google n’est possible que dans l’application en ligne ou installée (${impEsc(APP_PUBLIC_URL)}).</div>`}`}
@@ -9779,7 +9790,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1756-2fb95a1';
+const APP_BUILD = '20261111-1801-8834c6d';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
