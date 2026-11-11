@@ -4412,15 +4412,17 @@ const EmeraudeCore = (() => {
       const err = new Error('Phrase de passe incorrecte (ou données Google Drive abîmées)'); err.badPass = true; throw err;
     }
   }
-  // « …#/drive?r=<adresse du relais>&t=<code secret> », ou un texte collé qui le contient
+  // Adresse du relais : lien « …#/drive?r=<adresse> » (un ancien « &t=<code> » est ignoré : l'accès
+  // passe désormais par le compte Google), ou l'adresse /exec collée telle quelle
   const RELAY_URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(exec|dev)$/;
   function parseDriveLink(text) {
-    const m = /[#?&]r=([^&\s]+)&t=([a-f0-9]{40})(?![a-f0-9])/i.exec(String(text || ''));
-    if (!m) return null;
+    const s = String(text || '').trim();
+    const m = /[#?&]r=([^&\s]+)/.exec(s);
     let url = '';
-    try { url = decodeURIComponent(m[1]); } catch (e) { return null; }
+    if (m) { try { url = decodeURIComponent(m[1]); } catch (e) { return null; } }
+    else url = (/https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(?:exec|dev)(?![\w-])/.exec(s) || [''])[0];
     const k = RELAY_URL_RE.exec(url);
-    return k ? { url, token: m[2].toLowerCase(), dev: k[1] === 'dev' } : null;
+    return k ? { url, dev: k[1] === 'dev' } : null;
   }
   // Révision distante / dernière révision synchronisée / modifications locales en attente
   function syncPlan(remoteRev, knownRev, dirty) {
@@ -8454,18 +8456,20 @@ async function odInit() {
 // SYNCHRONISATION GOOGLE DRIVE (relais Apps Script personnel)
 // ......................................
 // Le fichier « emeraude › emeraude_data.json » du Google Drive de Loïc est lu et écrit par un
-// relais Google Apps Script (relais/Code.gs) qui tourne sur son compte. L'application l'appelle
-// avec un code secret reçu par le lien de connexion (…#/drive?r=<relais>&t=<code>). Fonctionne
-// aussi en file://. Le contenu est chiffré dans le navigateur (EmeraudeCore.sealText) : la phrase
+// relais Google Apps Script (relais/Code.gs) qui tourne sur son compte. Accès réservé à SON compte
+// Google : l'appli le connecte avec Google (jeton d'identité, flux OAuth « id_token » sans
+// bibliothèque), le relais vérifie le jeton et rend une session par appareil (30 jours, prolongée à
+// l'usage). La connexion Google exige https ou localhost (pas file://). Le contenu est chiffré
+// dans le navigateur (EmeraudeCore.sealText) : la phrase
 // de passe ne quitte jamais l'appareil. Écriture conditionnelle par numéro de révision
 // (expectedRev), équivalent du If-Match de OneDrive. localStorage reste le cache hors ligne.
-const GD = { busy:false, again:false, rev:0, timer:null, lastError:'', needPass:false, pass:'', relayVersion:null, started:false };
-const GD_RELAY_EXPECTED = 2;   // RELAY_VERSION de relais/Code.gs (2 : cours de bourse)
+const GD = { busy:false, again:false, rev:0, timer:null, lastError:'', needPass:false, needLogin:false, pass:'', relayVersion:null, started:false };
+const GD_RELAY_EXPECTED = 3;   // RELAY_VERSION de relais/Code.gs (2 : cours de bourse ; 3 : accès par compte Google)
 const GD_EXCLUSIVE_MSG = 'Les données sont synchronisées par Google Drive : déconnectez d’abord Google Drive (Paramètres › Sauvegarde) pour utiliser une autre synchronisation.';
 function gdAuth() { return odReadLS('emeraude-gd-auth'); }
 function gdState() { return odReadLS('emeraude-gd-sync'); }
 function gdSetState(patch) { odWriteLS('emeraude-gd-sync', Object.assign(gdState(), patch)); }
-function gdConfigured() { const a = gdAuth(); return !!(SETTINGS.gdEnabled && a.url && a.token); }
+function gdConfigured() { const a = gdAuth(); return !!(SETTINGS.gdEnabled && a.url && a.session); }
 function gdStoredPass() { try { return localStorage.getItem('emeraude-gd-pass') || ''; } catch(e) { return ''; } }
 function gdRememberPass(pass, remember) {
   try { if (remember) localStorage.setItem('emeraude-gd-pass', pass); else localStorage.removeItem('emeraude-gd-pass'); } catch(e) {}
@@ -8476,14 +8480,70 @@ async function gdCall(action, data={}, auth=gdAuth()) {
   let res;
   try {
     res = await fetch(auth.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({}, data, { action, token: auth.token })) });
+      body: JSON.stringify(Object.assign({}, data, { action, session: auth.session })) });
   } catch(e) { throw new Error(navigator.onLine ? 'Relais Google Drive injoignable' : 'Hors ligne — synchronisation au retour du réseau'); }
   if (!res.ok) throw new Error('Relais Google Drive : HTTP ' + res.status);
   let j;
   // Une page HTML à la place du JSON : déploiement archivé ou adresse changée
   try { j = await res.json(); } catch(e) { throw new Error('Relais Google Drive : réponse illisible — l’adresse du relais a peut-être changé, rouvrez le lien de connexion.'); }
-  if (j && j.error) throw new Error(j.code === 401 ? 'Code secret refusé par le relais : rouvrez le lien de connexion (Paramètres › Sauvegarde).' : 'Relais Google Drive : ' + j.error);
+  if (j && j.error && j.code === 401) {
+    GD.needLogin = true;
+    throw new Error('Connexion Google requise (session expirée ou fermée) : cliquez sur la pastille Drive ou Paramètres › Sauvegarde.');
+  }
+  if (j && j.error) throw new Error('Relais Google Drive : ' + j.error);
   return j;
+}
+
+// ── Connexion Google (flux OAuth « id_token », sans bibliothèque) ──
+const GD_GOOGLE_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
+const gdRandom = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+async function gdRelayInfo(url) {
+  let r;
+  try { r = await fetch(url, { cache: 'no-store' }); } catch(e) { throw new Error('Relais Google Drive injoignable'); }
+  let j; try { j = await r.json(); } catch(e) { throw new Error('Adresse du relais incorrecte (pas de réponse du relais Émeraude).'); }
+  if (j.app !== 'emeraude-relais') throw new Error('Cette adresse n’est pas un relais Émeraude.');
+  return j;
+}
+// Redirige vers Google ; au retour (#id_token=…), gdFromHash() ouvre la session auprès du relais
+async function gdLogin(relayUrl) {
+  const url = relayUrl || gdAuth().url;
+  if (!url) { alert('Collez d’abord l’adresse du relais (Paramètres › Sauvegarde › Google Drive).'); return; }
+  if (!odSecureContext()) {
+    alert('La connexion Google exige l’application en ligne ou installée :\n' + APP_PUBLIC_URL + '\n\n(Google n’accepte pas une page ouverte directement depuis un fichier.)');
+    return;
+  }
+  let info;
+  try { info = await gdRelayInfo(url); } catch(e) { alert(e.message); return; }
+  if (!info.clientId) { alert('Relais pas encore configuré : CLIENT_ID vide dans relais/Code.gs (voir relais/LISEZ-MOI.txt).'); return; }
+  if (info.version < GD_RELAY_EXPECTED) { alert(`Relais en version ${info.version} : version ${GD_RELAY_EXPECTED} attendue — redéployez relais/Code.gs.`); return; }
+  const nonce = gdRandom(), state = gdRandom();
+  try { sessionStorage.setItem('emeraude-gd-login', JSON.stringify({ url, nonce, state })); } catch(e) {}
+  const q = new URLSearchParams({ client_id: info.clientId, redirect_uri: location.origin + location.pathname, response_type: 'id_token',
+    scope: 'openid email', nonce, state, prompt: 'select_account' });
+  location.assign(GD_GOOGLE_AUTH + '?' + q);
+}
+// Retour de Google : jeton d'identité → session auprès du relais
+async function gdFinishLogin(params) {
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem('emeraude-gd-login') || 'null'); sessionStorage.removeItem('emeraude-gd-login'); } catch(e) {}
+  if (!pending || params.get('state') !== pending.state) return;
+  if (params.get('error')) { alert('Connexion Google annulée ou refusée : ' + params.get('error')); return; }
+  let j;
+  try {
+    const r = await fetch(pending.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'login', idToken: params.get('id_token'), nonce: pending.nonce, device: navigator.userAgent.replace(/\s+/g, ' ').slice(0, 80) }) });
+    j = await r.json();
+  } catch(e) { alert('Relais Google Drive injoignable : connexion impossible.'); return; }
+  if (!j.session) { alert('Accès refusé par le relais : ' + (j.error || 'réponse inattendue')); return; }
+  const auth = { url: pending.url, session: j.session, email: j.email };
+  GD.needLogin = false; GD.lastError = ''; GD.relayVersion = j.relayVersion;
+  if (SETTINGS.gdEnabled && gdState().rev != null) {
+    // Reconnexion d'un appareil déjà synchronisé : on reprend simplement
+    odWriteLS('emeraude-gd-auth', auth);
+    gdStart(); gdSync();
+    return;
+  }
+  await gdConnect(auth);
 }
 
 async function gdDecode(content, pass=GD.pass) {
@@ -8584,12 +8644,13 @@ function gdPill() {
   const st = gdState();
   let cls = 'ok', txt = 'Drive ✓', tip = 'Google Drive à jour' + (st.lastSync ? ' · ' + new Date(st.lastSync).toLocaleString('fr-FR') : '');
   if (GD.busy)              { cls = 'busy'; txt = 'Drive …'; tip = 'Synchronisation en cours'; }
+  else if (GD.needLogin)    { cls = 'err';  txt = 'Drive connexion'; tip = 'Connexion Google requise (cliquer)'; }
   else if (GD.needPass)     { cls = 'err';  txt = 'Drive 🔒'; tip = (GD.lastError ? GD.lastError + ' — ' : '') + 'Saisir la phrase de passe (cliquer)'; }
   else if (GD.lastError)    { cls = 'err';  txt = 'Drive !'; tip = GD.lastError; }
   else if (st.dirty)        { cls = 'busy'; txt = 'Drive ↑'; tip = 'Modifications locales à envoyer'; }
   el.className = 'sync-pill ' + cls; el.textContent = txt; el.title = tip;
 }
-function gdPillClick() { if (GD.needPass) gdEnterPass(); else gdSync(); }
+function gdPillClick() { if (GD.needLogin) gdLogin(); else if (GD.needPass) gdEnterPass(); else gdSync(); }
 
 // Fenêtre de saisie de la phrase de passe (champ masqué, contrairement à prompt())
 function gdAskPass({ creating=false, title='', message='' }={}) {
@@ -8651,17 +8712,22 @@ function gdStopOtherSyncs() {
   return stopped;
 }
 
-async function gdConnect(text) {
+// Adresse du relais collée ou lien ouvert : vérification de l'adresse, puis connexion Google
+async function gdConnectLink(text) {
   const link = EmeraudeCore.parseDriveLink(text);
-  if (!link) { alert('Lien de connexion non reconnu : il doit contenir « #/drive?r=https://script.google.com/macros/s/…/exec&t=… » (journal de installer() dans le script du relais).'); return; }
+  if (!link) { alert('Adresse du relais non reconnue : elle commence par https://script.google.com/macros/s/ et se termine par /exec (journal de installer() dans le script du relais).'); return; }
   if (link.dev) {
-    const u = (prompt('Ce lien contient l’adresse de TEST du relais (elle se termine par /dev) : elle ne fonctionne que dans l’éditeur de script.\n\n' +
+    const u = (prompt('C’est l’adresse de TEST du relais (elle se termine par /dev) : elle ne fonctionne que dans l’éditeur de script.\n\n' +
       'Dans script.google.com : Déployer › Gérer les déploiements › « Application Web » › copiez l’URL qui se termine par /exec et collez-la ici :') || '').trim();
-    const k = EmeraudeCore.parseDriveLink('#/drive?r=' + encodeURIComponent(u) + '&t=' + link.token);
+    const k = EmeraudeCore.parseDriveLink(u);
     if (!k || k.dev) { if (u) alert('Adresse refusée : elle doit commencer par https://script.google.com/macros/s/ et se terminer par /exec.'); return; }
     link.url = k.url;
   }
-  const auth = { url: link.url, token: link.token };
+  await gdLogin(link.url);
+}
+
+// Premier branchement de cet appareil (session Google déjà ouverte) : phrase de passe, données
+async function gdConnect(auth) {
   let meta, remote = null;
   try { meta = await gdCall('meta', {}, auth); }
   catch(e) { alert('Connexion à Google Drive impossible : ' + e.message); return; }
@@ -8714,29 +8780,31 @@ function gdDisconnect() {
   if (!confirm('Déconnecter Google Drive sur cet appareil ? Les données restent dans ce navigateur et sur Google Drive.')) return;
   odWriteLS('emeraude-gd-auth', {}); odWriteLS('emeraude-gd-sync', {}); gdRememberPass('', false);
   SETTINGS.gdEnabled = false; saveSettings();
-  Object.assign(GD, { pass: '', needPass: false, lastError: '', relayVersion: null });
+  Object.assign(GD, { pass: '', needPass: false, needLogin: false, lastError: '', relayVersion: null });
   gdPill(); renderParametres();
 }
 
 function gdSettingsCard(btnPri, btnSec) {
   const st = gdState(), a = gdAuth(), on = gdConfigured();
   const status = !on ? 'Non connecté'
+    : GD.needLogin ? 'Connexion Google requise'
     : GD.needPass ? 'Phrase de passe à saisir' + (GD.lastError ? ' · ' + GD.lastError : '')
     : GD.lastError ? 'Erreur : ' + GD.lastError
     : 'Connecté' + (st.lastSync ? ' · dernière synchro ' + new Date(st.lastSync).toLocaleString('fr-FR') : '') + (st.dirty ? ' · modifications en attente' : '');
   const old = on && GD.relayVersion != null && GD.relayVersion < GD_RELAY_EXPECTED;
   return `<div class="c3w" style="margin-bottom:20px"><div class="c3" style="padding:16px"><div class="shine"></div>
     <div style="font-size:0.75rem;font-weight:600;color:var(--text-1);margin-bottom:6px">🔒 Synchronisation Google Drive (PC + smartphone)</div>
-    <div style="font-size:0.65rem;color:var(--text-4);margin-bottom:10px">Les données sont enregistrées <strong>chiffrées</strong> dans <code style="color:var(--em-pale)">Google Drive › emeraude › emeraude_data.json</code> par votre relais personnel, et partagées entre tous vos appareils connectés — y compris le fichier HTML ouvert directement sur le PC. La phrase de passe ne quitte jamais l'appareil. Installation du relais : <code style="color:var(--em-pale)">relais/LISEZ-MOI.txt</code>.</div>
+    <div style="font-size:0.65rem;color:var(--text-4);margin-bottom:10px">Les données sont enregistrées <strong>chiffrées</strong> dans <code style="color:var(--em-pale)">Google Drive › Émeraude données › emeraude_data.json</code> par votre relais personnel, et partagées entre vos appareils. <strong>Accès réservé à votre compte Google</strong> : chaque appareil se connecte avec Google (application en ligne ou installée). La phrase de passe ne quitte jamais l'appareil. Installation du relais : <code style="color:var(--em-pale)">relais/LISEZ-MOI.txt</code>.</div>
     <div style="font-size:0.65rem;color:${on && !GD.lastError && !GD.needPass ? 'var(--em-bright)' : 'var(--text-4)'};margin-bottom:12px">${impEsc(status)}</div>
     ${old ? `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Relais en version ${GD.relayVersion} : version ${GD_RELAY_EXPECTED} attendue — redéployez-le (relais/deployer-relais.ps1).</div>` : ''}
-    ${on ? `<div style="font-size:0.62rem;color:var(--text-4);margin-bottom:10px;word-break:break-all">Relais : ${impEsc(a.url)}${GD.relayVersion != null ? ' · version ' + GD.relayVersion : ''}</div>` : `
+    ${on ? `<div style="font-size:0.62rem;color:var(--text-4);margin-bottom:10px;word-break:break-all">${a.email ? 'Compte Google : <strong>' + impEsc(a.email) + '</strong> · ' : ''}Relais : ${impEsc(a.url)}${GD.relayVersion != null ? ' · version ' + GD.relayVersion : ''}</div>` : `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <input id="gd-link" class="form-input" type="password" autocomplete="off" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Coller le lien de connexion (…#/drive?r=…&t=…)" />
-      <button onclick="gdConnect(document.getElementById('gd-link').value)" style="${btnPri};padding:8px 14px;font-size:0.75rem">Connecter Google Drive</button>
-    </div>`}
+      <input id="gd-link" class="form-input" autocomplete="off" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Adresse du relais (https://script.google.com/macros/s/…/exec) ou lien de connexion" />
+      <button onclick="gdConnectLink(document.getElementById('gd-link').value)" style="${btnPri};padding:8px 14px;font-size:0.75rem" ${odSecureContext() ? '' : 'disabled title="Ouvrez l’application en ligne ou installée"'}>Se connecter avec Google</button>
+    </div>
+    ${odSecureContext() ? '' : `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Fichier ouvert depuis le PC : la connexion Google n’est possible que dans l’application en ligne ou installée (${impEsc(APP_PUBLIC_URL)}).</div>`}`}
     ${on ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button onclick="${GD.needPass ? 'gdEnterPass()' : 'gdSync()'}" style="${btnPri};padding:8px 14px;font-size:0.75rem">${GD.needPass ? 'Saisir la phrase de passe' : 'Synchroniser maintenant'}</button>
+      <button onclick="${GD.needLogin ? 'gdLogin()' : GD.needPass ? 'gdEnterPass()' : 'gdSync()'}" style="${btnPri};padding:8px 14px;font-size:0.75rem">${GD.needLogin ? 'Se reconnecter avec Google' : GD.needPass ? 'Saisir la phrase de passe' : 'Synchroniser maintenant'}</button>
       <button onclick="gdForgetPass()" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${gdStoredPass() ? '' : 'disabled'}>Oublier la phrase sur cet appareil</button>
       <button onclick="gdReplaceRemote()" style="${btnSec};padding:8px 14px;font-size:0.75rem">Changer la phrase de passe…</button>
       <button onclick="gdDisconnect()" style="${btnSec};padding:8px 14px;font-size:0.75rem">Déconnecter</button>
@@ -8752,13 +8820,18 @@ function gdStart() {
   setInterval(() => { if (document.visibilityState === 'visible') gdSync(); }, 2 * 60 * 1000);   // quotas Apps Script
 }
 
-// Lien de connexion ouvert (au démarrage ou dans l'appli déjà ouverte) : le code secret est
-// retiré de la barre d'adresse avant toute autre chose
+// Au démarrage (ou lien ouvert dans l'appli) : retour de Google (#id_token=…) ou lien du relais
+// (#/drive?r=…). Le jeton est retiré de la barre d'adresse avant toute autre chose.
 async function gdFromHash() {
   const h = String(location.hash);
+  if (/^#(id_token|error)=/.test(h) || /^#.*[&]state=/.test(h) && /id_token=|error=/.test(h)) {
+    history.replaceState(null, '', location.pathname + location.search);
+    await gdFinishLogin(new URLSearchParams(h.slice(1)));
+    return;
+  }
   if (!h.startsWith('#/drive')) return;
   history.replaceState(null, '', location.pathname + location.search);
-  await gdConnect(h);
+  await gdConnectLink(h);
 }
 
 async function gdInit() {
@@ -9697,7 +9770,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1656-e44fb96';
+const APP_BUILD = '20261111-1714-6dfe57b';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
