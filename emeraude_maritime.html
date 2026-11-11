@@ -4424,6 +4424,14 @@ const EmeraudeCore = (() => {
     const k = RELAY_URL_RE.exec(url);
     return k ? { url, dev: k[1] === 'dev' } : null;
   }
+  // Retour de la connexion Google : « #state=…&id_token=… » (Google met souvent state en premier),
+  // ou « #error=… ». Rend {idToken, state, error} ou null si l'adresse n'est pas un retour de connexion.
+  function oauthReturn(hash) {
+    const h = String(hash || '').replace(/^#/, '');
+    if (!/(^|&)(id_token|error)=/.test(h)) return null;
+    const p = new URLSearchParams(h);
+    return { idToken: p.get('id_token') || '', state: p.get('state') || '', error: p.get('error') || '' };
+  }
   // Révision distante / dernière révision synchronisée / modifications locales en attente
   function syncPlan(remoteRev, knownRev, dirty) {
     if (!remoteRev) return 'push';                 // fichier Drive encore vide
@@ -4517,7 +4525,7 @@ const EmeraudeCore = (() => {
   return { SCHEMA_VERSION, IMPORTERS, MERGE_SECTIONS, repairMojibake, deepRepair, normText, parseNum, toISO, isoToFr,
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
-    planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, syncPlan, isoWeek,
+    planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
     quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
 })();
 // IMPORT_CORE_END
@@ -8523,15 +8531,15 @@ async function gdLogin(relayUrl) {
   location.assign(GD_GOOGLE_AUTH + '?' + q);
 }
 // Retour de Google : jeton d'identité → session auprès du relais
-async function gdFinishLogin(params) {
+async function gdFinishLogin(ret) {
   let pending = null;
   try { pending = JSON.parse(sessionStorage.getItem('emeraude-gd-login') || 'null'); sessionStorage.removeItem('emeraude-gd-login'); } catch(e) {}
-  if (!pending || params.get('state') !== pending.state) return;
-  if (params.get('error')) { alert('Connexion Google annulée ou refusée : ' + params.get('error')); return; }
+  if (!pending || !ret.state || ret.state !== pending.state) return;
+  if (ret.error) { alert('Connexion Google annulée ou refusée : ' + ret.error); return; }
   let j;
   try {
     const r = await fetch(pending.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'login', idToken: params.get('id_token'), nonce: pending.nonce, device: navigator.userAgent.replace(/\s+/g, ' ').slice(0, 80) }) });
+      body: JSON.stringify({ action: 'login', idToken: ret.idToken, nonce: pending.nonce, device: navigator.userAgent.replace(/\s+/g, ' ').slice(0, 80) }) });
     j = await r.json();
   } catch(e) { alert('Relais Google Drive injoignable : connexion impossible.'); return; }
   if (!j.session) { alert('Accès refusé par le relais : ' + (j.error || 'réponse inattendue')); return; }
@@ -8824,9 +8832,10 @@ function gdStart() {
 // (#/drive?r=…). Le jeton est retiré de la barre d'adresse avant toute autre chose.
 async function gdFromHash() {
   const h = String(location.hash);
-  if (/^#(id_token|error)=/.test(h) || /^#.*[&]state=/.test(h) && /id_token=|error=/.test(h)) {
+  const ret = EmeraudeCore.oauthReturn(h);
+  if (ret) {
     history.replaceState(null, '', location.pathname + location.search);
-    await gdFinishLogin(new URLSearchParams(h.slice(1)));
+    await gdFinishLogin(ret);
     return;
   }
   if (!h.startsWith('#/drive')) return;
@@ -9770,7 +9779,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1714-6dfe57b';
+const APP_BUILD = '20261111-1756-2fb95a1';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
