@@ -8477,6 +8477,12 @@ async function odInit() {
 // de passe ne quitte jamais l'appareil. Écriture conditionnelle par numéro de révision
 // (expectedRev), équivalent du If-Match de OneDrive. localStorage reste le cache hors ligne.
 const GD = { busy:false, again:false, rev:0, timer:null, lastError:'', needPass:false, needLogin:false, pass:'', relayVersion:null, started:false };
+// Relais d'Émeraude (compte loic.jugault@gmail.com) : connu de l'application, rien à coller.
+// Pas un secret : sans connexion Google du compte propriétaire, le relais refuse tout.
+const GD_RELAY_URL = 'https://script.google.com/macros/s/AKfycbyaABD93TBHigh-Eni-EMYar4jB5S4xDptlTz6C7oABYtDXGdVKCu36Zd-twrbX4BFg/exec';
+// Identifiant client Google du relais par défaut (le même que CLIENT_ID dans relais/Code.gs) :
+// permet d'ouvrir la page Google sans attendre le relais (plusieurs secondes s'il est en veille)
+const GD_CLIENT_ID = '420479161766-nsq7dleqol3uskpt13ga3th22p2cvmpt.apps.googleusercontent.com';
 const GD_RELAY_EXPECTED = 3;   // RELAY_VERSION de relais/Code.gs (2 : cours de bourse ; 3 : accès par compte Google)
 const GD_EXCLUSIVE_MSG = 'Les données sont synchronisées par Google Drive : déconnectez d’abord Google Drive (Paramètres › Sauvegarde) pour utiliser une autre synchronisation.';
 function gdAuth() { return odReadLS('emeraude-gd-auth'); }
@@ -8519,14 +8525,24 @@ async function gdRelayInfo(url) {
 }
 // Redirige vers Google ; au retour (#id_token=…), gdFromHash() ouvre la session auprès du relais
 async function gdLogin(relayUrl) {
-  const url = relayUrl || gdAuth().url;
-  if (!url) { alert('Collez d’abord l’adresse du relais (Paramètres › Sauvegarde › Google Drive).'); return; }
+  const url = relayUrl || gdAuth().url || GD_RELAY_URL;
   if (!odSecureContext()) {
     alert('La connexion Google exige l’application en ligne ou installée :\n' + APP_PUBLIC_URL + '\n\n(Google n’accepte pas une page ouverte directement depuis un fichier.)');
     return;
   }
+  // Le relais peut mettre plusieurs secondes à répondre (mise en veille d'Apps Script) : on le montre
+  if (GD.loggingIn) return;
+  GD.loggingIn = true;
+  const pill = document.getElementById('gd-pill');
+  const boutons = [...document.querySelectorAll('button')].filter(x => /Se connecter avec Google/.test(x.textContent));
+  if (pill) { pill.style.display = ''; pill.className = 'sync-pill busy'; pill.textContent = 'Google : connexion…'; }
+  boutons.forEach(x => { x.disabled = true; x.textContent = 'Connexion à Google…'; });
+  document.body.style.cursor = 'progress';
+  const fin = () => { GD.loggingIn = false; document.body.style.cursor = ''; gdPill(); if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres(); };
   let info;
-  try { info = await gdRelayInfo(url); } catch(e) { alert(e.message); return; }
+  if (url === GD_RELAY_URL && GD_CLIENT_ID) info = { clientId: GD_CLIENT_ID, version: GD_RELAY_EXPECTED };   // relais connu : départ immédiat
+  else { try { info = await gdRelayInfo(url); } catch(e) { fin(); alert(e.message); return; } }
+  if (!info.clientId || info.version < GD_RELAY_EXPECTED) fin();
   if (!info.clientId) { alert('Relais pas encore configuré : CLIENT_ID vide dans relais/Code.gs (voir relais/LISEZ-MOI.txt).'); return; }
   if (info.version < GD_RELAY_EXPECTED) { alert(`Relais en version ${info.version} : version ${GD_RELAY_EXPECTED} attendue — redéployez relais/Code.gs.`); return; }
   const nonce = gdRandom(), state = gdRandom();
@@ -8541,13 +8557,17 @@ async function gdFinishLogin(ret) {
   try { pending = JSON.parse(sessionStorage.getItem('emeraude-gd-login') || 'null'); sessionStorage.removeItem('emeraude-gd-login'); } catch(e) {}
   if (!pending || !ret.state || ret.state !== pending.state) return;
   if (ret.error) { alert('Connexion Google annulée ou refusée : ' + ret.error); return; }
+  const pill = document.getElementById('gd-pill');
+  if (pill) { pill.style.display = ''; pill.className = 'sync-pill busy'; pill.textContent = 'Google : connexion…'; pill.title = 'Ouverture de la session auprès du relais'; }
+  document.body.style.cursor = 'progress';
   let j;
   try {
     const r = await fetch(pending.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'login', idToken: ret.idToken, nonce: pending.nonce, device: navigator.userAgent.replace(/\s+/g, ' ').slice(0, 80) }) });
     j = await r.json();
-  } catch(e) { alert('Relais Google Drive injoignable : connexion impossible.'); return; }
-  if (!j.session) { alert('Accès refusé par le relais : ' + (j.error || 'réponse inattendue')); return; }
+  } catch(e) { document.body.style.cursor = ''; gdPill(); alert('Relais Google Drive injoignable : connexion impossible.'); return; }
+  document.body.style.cursor = '';
+  if (!j.session) { gdPill(); alert('Accès refusé par le relais : ' + (j.error || 'réponse inattendue')); return; }
   const auth = { url: pending.url, session: j.session, email: j.email };
   GD.needLogin = false; GD.lastError = ''; GD.relayVersion = j.relayVersion;
   if (SETTINGS.gdEnabled && gdState().rev != null) {
@@ -8652,7 +8672,13 @@ function gdMarkDirty() {
 
 function gdPill() {
   const el = document.getElementById('gd-pill'); if (!el) return;
-  if (!SETTINGS.gdEnabled) { el.style.display = 'none'; return; }
+  if (!SETTINGS.gdEnabled) {
+    // Raccourci de connexion, visible partout tant que Google Drive n'est pas branché
+    if (!odSecureContext()) { el.style.display = 'none'; return; }
+    el.style.display = ''; el.className = 'sync-pill busy'; el.textContent = 'Google : se connecter';
+    el.title = 'Se connecter avec Google pour enregistrer les données sur votre Google Drive';
+    return;
+  }
   el.style.display = '';
   const st = gdState();
   let cls = 'ok', txt = 'Drive ✓', tip = 'Google Drive à jour' + (st.lastSync ? ' · ' + new Date(st.lastSync).toLocaleString('fr-FR') : '');
@@ -8663,7 +8689,7 @@ function gdPill() {
   else if (st.dirty)        { cls = 'busy'; txt = 'Drive ↑'; tip = 'Modifications locales à envoyer'; }
   el.className = 'sync-pill ' + cls; el.textContent = txt; el.title = tip;
 }
-function gdPillClick() { if (GD.needLogin) gdLogin(); else if (GD.needPass) gdEnterPass(); else gdSync(); }
+function gdPillClick() { if (!SETTINGS.gdEnabled || GD.needLogin) gdLogin(); else if (GD.needPass) gdEnterPass(); else gdSync(); }
 
 // Fenêtre de saisie de la phrase de passe (champ masqué, contrairement à prompt())
 function gdAskPass({ creating=false, title='', message='' }={}) {
@@ -8817,11 +8843,15 @@ function gdSettingsCard(btnPri, btnSec) {
     <div style="font-size:0.65rem;color:${on && !GD.lastError && !GD.needPass ? 'var(--em-bright)' : 'var(--text-4)'};margin-bottom:12px">${impEsc(status)}</div>
     ${old ? `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Relais en version ${GD.relayVersion} : version ${GD_RELAY_EXPECTED} attendue — redéployez-le (relais/deployer-relais.ps1).</div>` : ''}
     ${on ? `<div style="font-size:0.62rem;color:var(--text-4);margin-bottom:10px;word-break:break-all">${a.email ? 'Compte Google : <strong>' + impEsc(a.email) + '</strong> · ' : ''}Relais : ${impEsc(a.url)}${GD.relayVersion != null ? ' · version ' + GD.relayVersion : ''}</div>` : `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-      <input id="gd-link" class="form-input" autocomplete="off" value="${impEsc(GD.linkDraft || '')}" oninput="GD.linkDraft = this.value" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Adresse du relais (https://script.google.com/macros/s/…/exec) ou lien de connexion" />
-      <button onclick="gdConnectLink(document.getElementById('gd-link').value)" style="${btnPri};padding:8px 14px;font-size:0.75rem" ${odSecureContext() ? '' : 'disabled title="Ouvrez l’application en ligne ou installée"'}>Se connecter avec Google</button>
-    </div>
-    ${odSecureContext() ? '' : `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Fichier ouvert depuis le PC : la connexion Google n’est possible que dans l’application en ligne ou installée (${impEsc(APP_PUBLIC_URL)}).</div>`}`}
+    <div style="margin-bottom:10px">${odSecureContext()
+      ? `<button onclick="gdLogin()" style="${btnPri};padding:10px 20px;font-size:0.85rem">Se connecter avec Google</button>`
+      : `<a href="${impEsc(APP_PUBLIC_URL)}" target="_blank" rel="noopener" style="${btnPri};padding:10px 20px;font-size:0.85rem;text-decoration:none">Ouvrir l’application en ligne pour se connecter</a>
+        <div style="font-size:0.65rem;color:#FCD34D;margin-top:8px">Fichier ouvert depuis le PC : Google n’accepte la connexion que dans l’application en ligne ou installée.</div>`}</div>
+    <details style="font-size:0.65rem;color:var(--text-4);margin-bottom:10px"><summary style="cursor:pointer">Utiliser un autre relais (avancé)</summary>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <input id="gd-link" class="form-input" autocomplete="off" value="${impEsc(GD.linkDraft || '')}" oninput="GD.linkDraft = this.value" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="https://script.google.com/macros/s/…/exec" />
+        <button onclick="gdConnectLink(document.getElementById('gd-link').value)" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${odSecureContext() ? '' : 'disabled'}>Se connecter</button>
+      </div></details>`}
     ${on ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="${GD.needLogin ? 'gdLogin()' : GD.needPass ? 'gdEnterPass()' : 'gdSync()'}" style="${btnPri};padding:8px 14px;font-size:0.75rem">${GD.needLogin ? 'Se reconnecter avec Google' : GD.needPass ? 'Saisir la phrase de passe' : 'Synchroniser maintenant'}</button>
       <button onclick="gdForgetPass()" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${gdStoredPass() ? '' : 'disabled'}>Oublier la phrase sur cet appareil</button>
@@ -8856,6 +8886,9 @@ async function gdFromHash() {
 
 async function gdInit() {
   window.addEventListener('hashchange', gdFromHash);
+  // Retour arrière depuis la page Google (page restaurée du cache) : débloquer le bouton
+  window.addEventListener('pageshow', e => { if (e.persisted && GD.loggingIn) { GD.loggingIn = false; document.body.style.cursor = ''; gdPill();
+    if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres(); } });
   await gdFromHash();
   gdPill();
   if (!gdConfigured()) return;
@@ -9790,7 +9823,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1801-8834c6d';
+const APP_BUILD = '20261111-1811-bb19b88';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
