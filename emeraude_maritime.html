@@ -9,6 +9,9 @@
   // (attribut data-pwa : check_js.py / check_budget.py prennent la première balise script sans attribut)
   // Manifest PWA seulement en http(s) : en file:// (HTML ouvert depuis le dossier OneDrive) il est bloqué
   if (location.protocol !== 'file:') document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'manifest', href: 'manifest.webmanifest' }));
+  // Invitation d'installation (Chrome/Edge) gardée pour le bouton Paramètres › Version › Installer l'application
+  addEventListener('beforeinstallprompt', e => { e.preventDefault(); window.__emInstall = e; });
+  addEventListener('appinstalled', () => { window.__emInstall = null; window.__emInstalled = true; });
 </script>
 <meta name="theme-color" content="#010910">
 <meta name="mobile-web-app-capable" content="yes">
@@ -1538,6 +1541,9 @@ html, body {
         <div class="nav-item" data-page="budget" data-icon="💸" data-title="Budget">
           <span class="nav-ico">💸</span><span>Budget</span>
         </div>
+        <div class="nav-item" data-page="vehicule" data-icon="🚗" data-title="Véhicule">
+          <span class="nav-ico">🚗</span><span>Véhicule</span>
+        </div>
       </div>
       <div class="nav-sect">
         <div class="nav-sect-lbl">Patrimoine</div>
@@ -1547,7 +1553,7 @@ html, body {
         <div class="nav-item" data-page="portefeuille" data-icon="📈" data-title="Portefeuille">
           <span class="nav-ico">📈</span><span>Portefeuille</span>
         </div>
-        <div class="nav-item" data-page="crypt✓ data-icon="₿" data-title="Crypto-monnaies">
+        <div class="nav-item" data-page="crypto" data-icon="₿" data-title="Crypto-monnaies">
           <span class="nav-ico">₿</span><span>Crypto-monnaies</span>
         </div>
         <div class="nav-item" data-page="immobilier" data-icon="🏠" data-title="Immobilier">
@@ -1715,7 +1721,7 @@ html, body {
               <div class="stat-trend down" id="st-crypto">--</div>
             </div>
             <svg width="100%" height="38" viewBox="0 0 160 38" preserveAspectRatio="none">
-              <path id="sp-crypt✓ fill="none" stroke="rgba(251,191,36,0.65)" stroke-width="1.5" stroke-linecap="round"/>
+              <path id="sp-crypto" fill="none" stroke="rgba(251,191,36,0.65)" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
             <div class="spark-range" id="sp-crypto-rng"></div>
           </div></div>
@@ -1898,6 +1904,7 @@ html, body {
       </div>
 
       <div class="page" id="page-budget"><div id="budget-root"></div></div>
+      <div class="page" id="page-vehicule"><div id="vehicule-root"></div></div>
 
       <div class="page" id="page-banque">
         <div id="banque-root"></div>
@@ -2712,7 +2719,8 @@ function ptfLiveBadgeMarkup() {
 // Google Drive à chaque cours provoquerait des conflits entre le PC et le smartphone.
 // Ils partent avec la prochaine vraie modification ; replaceDataSnapshot() les fusionne.
 function ptfSaveLocal() {
-  recalculateDerivedData();
+  const P = recalculateDerivedData();
+  const net = document.getElementById('tb-net'); if (net) net.textContent = fmt(P.total);
   try { localStorage.setItem('emeraude-data', JSON.stringify(DATA)); } catch(e) {}
 }
 
@@ -2958,6 +2966,50 @@ function ptfAddOp() {
   DATA.portefeuille.operations.unshift(op);
   PTF_UI.showAddOp = false;
   saveData(); renderPortefeuille();
+}
+
+// ── Ordres d'achat par an (objectif réglable, 12 par défaut) ─────────────────
+function ptfSetObjectifOrdres(v) {
+  const n = Math.round(+v);
+  if (!(n > 0)) return;
+  DATA.portefeuille.objectifAchatsAn = n;
+  saveData(); renderPortefeuille();
+}
+function ptfOrdresCard() {
+  const today = todayISO();
+  const o = EmeraudeCore.ordresAchat(DATA.portefeuille.operations, today, DATA.portefeuille.objectifAchatsAn || 12);
+  const c = o.courant, NOMS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+  const m = +today.slice(5, 7);
+  const statut = c.atteint ? `<span class="amt-pos">✓ objectif atteint pour ${c.annee}</span>`
+    : c.enRetard ? `<span style="color:#FCA5A5">En retard sur le rythme d'un achat par mois : ${c.attendu} attendus fin ${NOMS[m - 1]}, ${c.reste} encore à passer d'ici le 31/12</span>`
+    : `<span style="color:var(--text-2)">Dans le rythme · ${c.reste} achat${c.reste > 1 ? 's' : ''} encore à passer d'ici le 31/12</span>`;
+  const chips = NOMS.map((n, i) => {
+    const k = i + 1, nb = c.mois[k] || 0, passe = k <= m;
+    const bg = nb ? 'rgba(16,185,129,0.22)' : passe ? 'rgba(239,68,68,0.10)' : 'rgba(255,255,255,0.03)';
+    const bd = nb ? 'rgba(16,185,129,0.5)' : passe ? 'rgba(239,68,68,0.35)' : 'rgba(255,255,255,0.08)';
+    return `<div title="${n} ${c.annee} : ${nb} achat${nb > 1 ? 's' : ''}" style="flex:1;min-width:38px;text-align:center;padding:5px 2px;border-radius:6px;background:${bg};border:1px solid ${bd};font-size:0.6rem;color:var(--text-3)">${n}<div style="font-size:0.8rem;font-weight:700;color:${nb ? 'var(--em-bright)' : 'var(--text-4)'}">${nb || '·'}</div></div>`;
+  }).join('');
+  const rows = o.parAn.map(a => `<tr><td>${a.annee}</td><td style="text-align:right"><strong>${a.achats}</strong> / ${o.objectif}</td>
+    <td style="text-align:right">${fmt(a.montant)}</td><td style="text-align:right">${Object.keys(a.mois).length} / 12</td>
+    <td style="text-align:center">${a.atteint ? '<span class="amt-pos">✓</span>' : a.annee === c.annee ? '<span style="color:var(--text-4)">en cours</span>' : '<span class="amt-neg">✗</span>'}</td></tr>`).join('');
+  return `<div class="c3w" style="margin-bottom:14px"><div class="c3" style="padding:22px">
+  <div class="shine"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <div class="chart-hd" style="margin:0">Ordres d'achat ${c.annee}</div>
+    <label style="font-size:0.66rem;color:var(--text-3)">Objectif : au moins <input type="number" min="1" step="1" value="${o.objectif}" onchange="ptfSetObjectifOrdres(this.value)" class="form-input" style="width:64px;padding:3px 6px;display:inline-block"> achats par an</label>
+  </div>
+  <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+    <div style="font-size:2rem;font-weight:800;color:${c.atteint ? 'var(--em-bright)' : 'var(--text-1)'}">${c.achats}<span style="font-size:1rem;color:var(--text-3);font-weight:500"> / ${o.objectif}</span></div>
+    <div style="font-size:0.72rem;color:var(--text-3)">${fmt(c.montant)} investis en ${c.annee}</div>
+  </div>
+  <div style="height:6px;border-radius:3px;background:rgba(16,185,129,0.10);overflow:hidden;margin-bottom:6px">
+    <div style="height:100%;width:${Math.min(100, c.achats / o.objectif * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--em-base),var(--em-glow))"></div>
+  </div>
+  <div style="font-size:0.72rem;margin-bottom:12px">${statut}</div>
+  <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px">${chips}</div>
+  ${o.parAn.length ? `<table class="ptf-ops-table"><thead><tr><th>Année</th><th style="text-align:right">Achats</th><th style="text-align:right">Montant investi</th><th style="text-align:right">Mois avec achat</th><th style="text-align:center">Objectif</th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<div style="font-size:0.72rem;color:var(--text-4)">Aucun ordre d'achat enregistré. Ajoutez chaque achat dans « Historique des opérations » ci-dessous (+ Opération, type Achat) : le compteur se met à jour tout seul.</div>`}
+</div></div>`;
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -3245,6 +3297,8 @@ ${ptfEvoCard()}
   </div>
 </div></div>
 
+${ptfOrdresCard()}
+
 <!-- Op\u00e9rations ────────────────────────────────────────────────────────────── -->
 <div class="c3w"><div class="c3" style="padding:22px">
   <div class="shine"></div>
@@ -3354,7 +3408,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
       pg.classList.add('active');
       pg.querySelectorAll('.c3').forEach(attachTilt);
       // Lazy-render JS pages
-      const renderers = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, imports: renderImports, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, budget: renderBudget, salaire: renderSalaire, factures: renderFactures, stats: renderStats };
+      const renderers = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, imports: renderImports, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, budget: renderBudget, vehicule: renderVehicule, salaire: renderSalaire, factures: renderFactures, stats: renderStats };
       if (renderers[pid]) renderers[pid]();
       if (pid === 'dashboard') fetchFinancialNews();
     }
@@ -3370,7 +3424,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // IMPORT_CORE_START — aucun accès au DOM ni à DATA global : les données sont passées en
 // paramètre. Ce bloc est extrait et testé par tests/run-tests.js (node tests/run-tests.js).
 const EmeraudeCore = (() => {
-  const SCHEMA_VERSION = 4;
+  const SCHEMA_VERSION = 6;
 
   // ── Texte ───────────────────────────
   // Réparation du « double encodage » (UTF-8 relu en Windows-1252 : « Ã‰ » au lieu de « É »)
@@ -3623,8 +3677,8 @@ const EmeraudeCore = (() => {
     parse(f) {
       const tag = (s, t) => { const m = s.match(new RegExp('<' + t + '>\\s*([^<\\r\\n]*)', 'i')); return m ? xmlUnescape(m[1].trim()) : ''; };
       const org = tag(f.text, 'ORG');
-      const blocks = [...f.text.matchAll(/<(?:CC)?STMTRS>([\s\S]*?)<\/(?:CC)?STMTRS>/gi)].map(m => m[1]);
-      return (blocks.length ? blocks : [f.text]).map(b => {
+      const blocks = [...f.text.matchAll(/<(CC)?STMTRS>([\s\S]*?)<\/(?:CC)?STMTRS>/gi)].map(m => ({ carte: !!m[1], b: m[2] }));
+      return (blocks.length ? blocks : [{ carte: false, b: f.text }]).map(({ carte, b }) => {
         const ops = [...b.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map(m => {
           const t = m[1];
           return { date: toISO(tag(t, 'DTPOSTED')), amount: round2(parseNum(tag(t, 'TRNAMT'))),
@@ -3632,6 +3686,10 @@ const EmeraudeCore = (() => {
         }).filter(o => o.date && o.amount);
         const lb = (b.match(/<LEDGERBAL>([\s\S]*?)(?:<\/LEDGERBAL>|$)/i) || [])[1];
         const bal = lb ? { date: toISO(tag(lb, 'DTASOF')), value: parseNum(tag(lb, 'BALAMT')) } : null;
+        const fin4 = ((/carte[_ -]?(\d{4})/i.exec(f.name || '') || [])[1]) || tag(b, 'ACCTID').replace(/\D/g, '').slice(-4);
+        // Carte : le numéro complet n'est pas conservé ; le solde du relevé = encours pas encore débité du compte courant
+        if (carte) return { kind: 'bank', bankHint: org, accountHint: 'Carte …' + fin4, accountType: 'Carte bancaire', carteFin: fin4, ops,
+          balance: bal && bal.date && bal.value != null ? bal : null };
         return { kind: 'bank', bankHint: org, accountHint: tag(b, 'ACCTID'), ops,
           balance: bal && bal.date && bal.value != null ? bal : null };
       });
@@ -3831,7 +3889,7 @@ const EmeraudeCore = (() => {
     const hist = [];
     for (let i = 11; i >= 1; i--) hist.push(balanceAt(acc, new Date(Date.UTC(y, m - i, 0)).toISOString().slice(0, 10)));
     hist.push(cur);
-    acc.hist = hist;
+    acc.hist = estCarte(acc) ? hist.map(() => cur) : hist;   // carte : pas d'historique de solde reconstruit
   }
 
   // ── Anti-doublons : empreinte + rang pour les opérations identiques le même jour ──
@@ -3883,6 +3941,8 @@ const EmeraudeCore = (() => {
       acc.soldes.push({ date: res.balance.date, solde: round2(res.balance.value), source: 'relevé', importId: a.importId });
       acc.solde = balanceAt(acc, a.today);
       soldeSource = 'relevé';
+    } else if (estCarte(acc)) {
+      soldeSource = 'carte';
     } else {
       acc.solde = round2(soldeAvant + added.reduce((s, t) => s + t.amt, 0));
     }
@@ -3977,7 +4037,7 @@ const EmeraudeCore = (() => {
     ['banks', 'Banques & comptes'], ['portefeuille', 'Portefeuille (PEA)'], ['cryptoWallets', 'Crypto'], ['revenus', 'Revenus'],
     ['liquidites', 'Liquidités'], ['placements_banque', 'Placements'], ['prets', 'Crédits'], ['immobilierBiens', 'Immobilier'],
     ['biens', 'Biens personnels'], ['metaux', 'Métaux précieux'], ['businessActifs', 'Actifs business'], ['factures', 'Factures'],
-    ['budget', 'Budget'], ['transactions', 'Opérations récentes (tableau de bord)'],
+    ['budget', 'Budget'], ['vehicules', 'Véhicules'], ['transactions', 'Opérations récentes (tableau de bord)'],
   ];
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
   function mergeById(a, b, mergeItem) {
@@ -4331,6 +4391,327 @@ const EmeraudeCore = (() => {
     return { newer, theirs, version: published.version };
   }
 
+  // ── Budget : récurrences, mois, prévisions ──
+  // Récurrence : {id, type:'revenu'|'depense', libelle, montant, categorie_id, frequence, dateDebut, dateFin?,
+  //               actif, exceptions:{'AAAA-MM-JJ': {annule:true} | {montant}}}
+  const FREQUENCES = {
+    hebdo: { label: 'Toutes les semaines', jours: 7, parMois: 52 / 12 },
+    mensuel: { label: 'Tous les mois', mois: 1, parMois: 1 },
+    bimestriel: { label: 'Tous les 2 mois', mois: 2, parMois: 1 / 2 },
+    trimestriel: { label: 'Tous les trimestres', mois: 3, parMois: 1 / 3 },
+    semestriel: { label: 'Tous les 6 mois', mois: 6, parMois: 1 / 6 },
+    annuel: { label: 'Tous les ans', mois: 12, parMois: 1 / 12 },
+  };
+  const addDaysISO = (iso, n) => { const t = new Date(iso + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  const monthBounds = ym => { const [y, m] = ym.split('-').map(Number); return [`${ym}-01`, new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)]; };
+  const addMonthsYM = (ym, n) => addMonthsISO(ym + '-01', n).slice(0, 7);
+  // Dates d'une récurrence entre deux dates (incluses), exceptions appliquées
+  function occurrences(rec, from, to) {
+    const start = toISO(rec.dateDebut), f = FREQUENCES[rec.frequence];
+    if (!start || !f || rec.actif === false) return [];
+    const fin = toISO(rec.dateFin);
+    const end = fin && fin < to ? fin : to;
+    const out = [];
+    for (let k = 0; k < 5000; k++) {
+      const d = f.jours ? addDaysISO(start, k * f.jours) : addMonthsISO(start, k * f.mois);
+      if (d > end) break;
+      if (d < from) continue;
+      const ex = (rec.exceptions || {})[d] || {};
+      if (ex.annule) continue;
+      out.push({ date: d, montant: round2(ex.montant != null ? ex.montant : rec.montant), modifie: ex.montant != null });
+    }
+    return out;
+  }
+  const mensualise = rec => round2((+rec.montant || 0) * ((FREQUENCES[rec.frequence] || {}).parMois || 0));
+
+  // Opérations d'un mois, toutes sources réunies. opts = {today, source:'saisie'|'banque', inclureEmprunts, comptes:[ids]}
+  //  - saisie : opérations manuelles + récurrences (auto à leur date) + échéances de prêts + dépenses véhicule
+  //  - banque : opérations des comptes choisis (virements internes exclus) + opérations manuelles ;
+  //    récurrences et prêts servent alors seulement au « prévu » des jours à venir
+  function budgetMonth(data, ym, opts = {}) {
+    const today = opts.today, B = data.budget || {}, [from, to] = monthBounds(ym);
+    const source = opts.source || (B.reglages && B.reglages.source) || 'saisie';
+    const items = [];
+    const push = (date, type, libelle, montant, categorie_id, src, ref) => {
+      if (!montant) return;
+      items.push({ date, type, libelle: clean(libelle), montant: round2(Math.abs(montant)), categorie_id: categorie_id || (type === 'revenu' ? 'cat-rev-autre' : 'cat-autre'),
+        source: src, statut: date <= today ? 'reel' : 'prevu', ref: ref || '' });
+    };
+    (B.operations || []).forEach(o => { const d = toISO(o.date); if (d && d >= from && d <= to) push(d, o.type, o.libelle, o.montant, o.categorie_id, 'manuel', o.id); });
+    (B.recurrences || []).forEach(r => occurrences(r, from, to).forEach(oc => {
+      if (source === 'banque' && oc.date <= today) return;               // le relevé bancaire fait foi pour le passé
+      push(oc.date, r.type, r.libelle, oc.montant, r.categorie_id, 'auto', r.id + '|' + oc.date);
+    }));
+    const avecPrets = opts.inclureEmprunts != null ? opts.inclureEmprunts : !(B.reglages && B.reglages.inclureEmprunts === false);
+    if (avecPrets) (data.prets || []).forEach(p => loanSchedule(p, to).forEach(r => {
+      if (r.date < from || r.date > to || (source === 'banque' && r.date <= today)) return;
+      // relais TVA : son capital est remboursé par l'État, seuls les intérêts sont une dépense
+      const m = r.interets + r.assurance + (p.usage === 'tva' ? 0 : r.capital);
+      push(r.date, 'depense', 'Échéance ' + (p.nom || 'prêt'), m, 'cat-credits', 'pret', p.id);
+    }));
+    if (source === 'saisie') (data.vehicules || []).forEach(v => {
+      (v.depenses || []).forEach(e => { const d = toISO(e.date); if (d && d >= from && d <= to) push(d, 'depense', `${v.nom} · ${VEHICULE_TYPES[e.type] || e.type}${e.libelle ? ' · ' + e.libelle : ''}`, e.montant, 'cat-vehicule', 'vehicule', v.id); });
+      (v.pleins || []).forEach(p => { const d = toISO(p.date); if (d && d >= from && d <= to) push(d, 'depense', `${v.nom} · plein ${String(round2(+p.litres || 0)).replace('.', ',')} L`, pleinMontant(p), 'cat-carburant', 'vehicule', v.id); });
+    });
+    if (source === 'banque') {
+      const ids = new Set(opts.comptes || (B.reglages && B.reglages.comptes) || []);
+      (data.banks || []).forEach(b => (b.accounts || []).forEach(a => {
+        if (ids.size ? !ids.has(a.id) : !(/courant/i.test(a.type || '') || estCarte(a))) return;
+        (a.txns || []).forEach(t => {
+          const d = toISO(t.date);
+          if (!d || d < from || d > to || estVirementInterne(t)) return;
+          const type = +t.amt >= 0 ? 'revenu' : 'depense';
+          push(d, type, t.desc, t.amt, categoriser(B.categories || [], t, type), 'banque', a.id);
+        });
+      }));
+    }
+    items.sort((x, y) => x.date.localeCompare(y.date));
+    const sum = (type, statut) => round2(items.filter(i => i.type === type && (!statut || i.statut === statut)).reduce((s, i) => s + i.montant, 0));
+    const parCategorie = {};
+    (B.categories || []).forEach(c => { parCategorie[c.id] = { reel: 0, prevu: 0, budget: +c.budget_mensuel || 0 }; });
+    items.forEach(i => { const c = parCategorie[i.categorie_id] = parCategorie[i.categorie_id] || { reel: 0, prevu: 0, budget: 0 }; c[i.statut] = round2(c[i.statut] + i.montant); });
+    const revenus = { reel: sum('revenu', 'reel'), prevu: sum('revenu', 'prevu') }, depenses = { reel: sum('depense', 'reel'), prevu: sum('depense', 'prevu') };
+    revenus.total = round2(revenus.reel + revenus.prevu); depenses.total = round2(depenses.reel + depenses.prevu);
+    return { ym, from, to, source, items, revenus, depenses, solde: round2(revenus.total - depenses.total),
+      tauxEpargne: revenus.total > 0 ? (revenus.total - depenses.total) / revenus.total : null, parCategorie };
+  }
+  // Virements entre ses propres comptes : ni revenu ni dépense
+  // (et débit mensuel d'une carte à débit différé : ses achats sont comptés sur le relevé de la carte)
+  const estVirementInterne = t => /transaction exclue/i.test(t.categorie || '') || /virement interne/i.test(t.sousCategorie || '')
+    || /DEBITS? DIFFERES?|CUMUL DES DEBITS/i.test([t.desc, t.detail].filter(Boolean).join(' '));
+  // Catégorie d'une opération bancaire : mots-clés des catégories (libellé ou catégorie de la banque), sinon « Autre »
+  // ── Relevés bancaires : catégories automatiques et abonnements ──
+  // Règles intégrées sur le libellé (après les mots-clés de l'utilisateur, qui restent prioritaires).
+  // [motif, catégorie, marque d'abonnement (ou '')]. Les catégories sont créées par la migration v6.
+  const REGLES_MARCHANDS = [
+    // Abonnements connus (la marque sert aussi à regrouper les libellés différents d'un même service)
+    [/DISNEY ?PLUS|DISNEYPLUS/, 'cat-abonnement', 'Disney+'], [/NETFLIX/, 'cat-abonnement', 'Netflix'], [/SPOTIFY/, 'cat-abonnement', 'Spotify'],
+    [/DEEZER/, 'cat-abonnement', 'Deezer'], [/CANAL ?PLUS|CANALPLUS|\bCANAL\b/, 'cat-abonnement', 'Canal+'], [/PARAMOUNT/, 'cat-abonnement', 'Paramount+'],
+    [/CRUNCHYROLL/, 'cat-abonnement', 'Crunchyroll'], [/\bDAZN\b/, 'cat-abonnement', 'DAZN'], [/BEIN ?SPORT/, 'cat-abonnement', 'beIN Sports'],
+    [/\bHBO\b|\bMAX ?COM\b/, 'cat-abonnement', 'Max'], [/MOLOTOV/, 'cat-abonnement', 'Molotov'], [/YOUTUBE ?(PREMIUM|MUSIC)?/, 'cat-abonnement', 'YouTube'],
+    [/AMZ ?DIGITAL|AMZN ?DIGITAL|AMAZON ?PRIME|PRIME ?VIDEO|AMZN ?PRIME|AUDIBLE|KINDLE/, 'cat-abonnement', 'Amazon (numérique)'],
+    [/APPLE ?COM|ITUNES|ICLOUD|APPLE ?MUSIC/, 'cat-abonnement', 'Apple'], [/GOOGLE/, 'cat-abonnement', 'Google'],
+    [/MICROSOFT|\bMSFT\b|XBOX|OFFICE ?365/, 'cat-abonnement', 'Microsoft'], [/GITHUB/, 'cat-abonnement', 'GitHub'],
+    [/OPENAI|CHATGPT/, 'cat-abonnement', 'ChatGPT'], [/ANTHROPIC|CLAUDE ?AI/, 'cat-abonnement', 'Claude'], [/ADOBE/, 'cat-abonnement', 'Adobe'],
+    [/DROPBOX/, 'cat-abonnement', 'Dropbox'], [/NORDVPN|SURFSHARK|PROTON/, 'cat-abonnement', 'VPN'], [/\b2CO\b|MOVAVI|PADDLE/, 'cat-abonnement', 'Logiciel (2Checkout)'],
+    [/LINKEDIN/, 'cat-abonnement', 'LinkedIn'], [/PLAYSTATION|\bPSN\b|NINTENDO/, 'cat-abonnement', 'Jeux vidéo'],
+    [/BASIC ?FIT|FITNESS ?PARK|KEEP ?COOL|L ?ORANGE ?BLEUE|NEONESS/, 'cat-abonnement', 'Salle de sport'],
+    [/FREE ?MOBILE|FREE ?TELECOM|FREEBOX|\bSOSH\b|\bSFR\b|BOUYGUES ?TEL|ORANGE ?(SA|FRANCE|MOBILE)|RED ?BY ?SFR/, 'cat-telecom', 'Téléphone / internet'],
+    // Dépenses courantes
+    [/MAGASIN ?U\b|SUPER ?U\b|HYPER ?U\b|U ?EXPRESS|U ?ETAB|LECLERC|CARREFOUR|\bLIDL\b|\bALDI\b|AUCHAN|INTERMARCHE|MONOPRIX|FRANPRIX|\bCASINO\b|BIOCOOP|COOP ?BIO|NATURALIA|PICARD|GRAND ?FRAIS|BOUCHERIE|BOULANGERIE|MARIE ?BLACHERE|ROAZIDIS|KENNEDIS|\bNETTO\b|\bCOOP\b|\bALIM|PRIMEUR|FROMAGERIE|EPICERIE|SUPERMARKET|MARKET/, 'cat-alim', ''],
+    [/UBER ?EATS|DELIVEROO|JUST ?EAT|RESTAU|RISTORANTE|TRATTORIA|OSTERIA|PIZZ|SUSHI|BRASSERIE|MC ?DO|BURGER|\bKFC\b|PRET ?A ?MANGER|GRILL|SNACK|\bCAFE\b|CREPERIE|BRIOCHE|STARBUCKS|BISTRO|TAVERN|\bBAR\b|BEACH|RESTO|COMPTOIR|\bPAUL\b|DEL ?ARTE|GELATERIA|GLACIER|FISH|KAFFI|COFFEE|CUISINE|FOOD|DOLCE|GOINFRE|TRAITEUR|CREPE|KEBAB|TACOS|POKE|BRUNCH|CANTINE|TAPAS|\bWINE|\bPUB\b|DA PAOLO|CALICE|DOUCEUR/, 'cat-restaurant', ''],
+    [/\bTOTAL\b|TOTALENERGIES ?(STATION|RELAIS)|\bESSO\b|\bSHELL\b|\bBP\b|\bAVIA\b|CARBURANT|STATION ?SERVICE/, 'cat-carburant', ''],
+    [/\bSNCF\b|OUIGO|\bTGV\b|\bRATP\b|\bSTAR\b|KEOLIS|\bUBER\b|BLABLACAR|AUTOROUTE|\bAPRR\b|\bSANEF\b|VINCI ?AUTO|PEAGE|PARKING|\bINDIGO\b|EFFIA|\bTAXI\b|\bBUSS?\b|\bTRAM\b|\bMETRO\b/, 'cat-transport', ''],
+    [/BOOKING|AIRBNB|HOTEL|RADISSON|PARK ?INN|\bIBIS\b|NOVOTEL|MERCURE|EXPEDIA|AIR ?FRANCE|EASYJET|RYANAIR|VUELING|TRANSAVIA|FERRY|DUTY ?FREE|INFLIGHT|AEROPORT|AIRPORT|CHARTER|\bBKG\b|GETYOURGUIDE|ICELANDIA|GEYSIR|EXCURSION|\bBOAT|ALILAGUNA|VAPORETTO|\bACTV\b|VENEZIA|SEYCHELLES/, 'cat-voyage', ''],
+    [/CASTORAMA|LEROY ?MERLIN|BRICO|\bIKEA\b|CONFORAMA|MAISONS ?DU ?MONDE|TRUFFAUT|JARDILAND|BOULANGER|\bDARTY\b|ELECTRONI|BLANC ?MAISON|BOTANIC/, 'cat-maison', ''],
+    [/PHARMACIE|PHARMA|MEDECIN|DOCTOLIB|DENTISTE|OPTIC|LABORATOIRE|HOPITAL|\bKINE|\bDR\b|DOCTEUR|OSTEO/, 'cat-sante', ''],
+    [/COIFF|PLANITY|BARBER|ESTHETI|SEPHORA|NOCIBE|YVES ?ROCHER/, 'cat-soins', ''],
+    [/AMAZON|\bAMZN\b|CDISCOUNT|ZALANDO|DECATHLON|SPORT ?2000|SPORTS?\b|INTERSPORT|\bZARA\b|\bH ?M\b|KIABI|\bRELAY\b|\bACTION\b|\bGIFI\b|ALIEXPRESS|\bTEMU\b|\bSHEIN\b|VINTED|\bFNAC\b|STORE\b|SHOP|CULTURA|CHAUSSURE|AROMA ?ZONE|EPODEX|GALERIES|PRINTEMPS|BOUTIQUE|ESSENTIEL/, 'cat-shopping', ''],
+    [/CINE|PATHE|GAUMONT|\bCGR\b|MUSEE|MUSEO|MUSEUM|LAGOON|\bSPA\b|BOWLING|TICKETMASTER|BILLETTERIE|PALAZZO/, 'cat-loisirs', ''],
+    [/FRAIS ?BANCAIRES|COMMISSION|COTISATION ?CARTE|\bCOM ?CB\b|AGIOS/, 'cat-banque', ''],
+    [/\bDGFIP\b|IMPOTS?\b|TRESOR ?PUBLIC/, 'cat-impots', ''],
+    [/\bLOYER\b|\bEDF\b|ENGIE|\bVEOLIA\b|\bSAUR\b|EAU ?DE|SYNDIC|CHARGES ?COPRO/, 'cat-logement', ''],
+  ];
+  const REGLES_REVENUS = [[/SALAIRE|\bPAIE\b|REMUNERATION/, 'cat-rev-salaire'], [/LOYER|LOCATION/, 'cat-rev-loyers'],
+    [/DIVIDENDE|INTERETS?|COUPON/, 'cat-rev-placements']];
+  // Catégories des banques (export CSV Caisse d'Épargne…) → catégories Émeraude
+  const CAT_BANQUE = [[/aliment|courses|supermarch/, 'cat-alim'], [/restau|sorties|bar/, 'cat-restaurant'], [/carburant/, 'cat-carburant'],
+    [/transport|vehicule|auto|peage|parking/, 'cat-transport'], [/voyage|vacance|hebergement|hotel/, 'cat-voyage'], [/sante|pharmac|medical/, 'cat-sante'],
+    [/abonnement|multimedia|internet|telephon/, 'cat-abonnement'], [/logement|loyer|energie|eau/, 'cat-logement'], [/bricolage|maison|jardin|equipement/, 'cat-maison'],
+    [/shopping|achats|vetement|habillement/, 'cat-shopping'], [/loisir|culture|sport/, 'cat-loisirs'], [/banque|frais|assurance/, 'cat-banque'],
+    [/impot|taxe/, 'cat-impots'], [/beaute|soins|coiff/, 'cat-soins']];
+  const texteOp = t => [t.desc, t.detail].filter(Boolean).join(' ');
+  const majOp = t => normText(texteOp(t)).toUpperCase();
+  // Catégorie d'une opération : 1) mots-clés de l'utilisateur, 2) règles intégrées, 3) catégorie de la banque, 4) « Autre »
+  function categoriserOp(categories, t, type) {
+    const ids = new Set(categories.map(c => c.id));
+    const txt = normText([texteOp(t), t.categorie, t.sousCategorie].filter(Boolean).join(' '));
+    const user = categories.find(c => (c.type || 'depense') === type && (c.motsCles || []).some(k => normText(k) && txt.includes(normText(k))));
+    if (user) return { categorie_id: user.id, origine: 'mot-clé', marque: '' };
+    const up = majOp(t);
+    if (type === 'revenu') {
+      const r = REGLES_REVENUS.find(([re, id]) => re.test(up) && ids.has(id));
+      return { categorie_id: r ? r[1] : 'cat-rev-autre', origine: r ? 'règle' : 'défaut', marque: '' };
+    }
+    const r = REGLES_MARCHANDS.find(([re, id]) => re.test(up) && ids.has(id));
+    if (r) return { categorie_id: r[1], origine: 'règle', marque: r[2] };
+    const bc = normText([t.categorie, t.sousCategorie].filter(Boolean).join(' '));
+    const b = bc && CAT_BANQUE.find(([re, id]) => re.test(bc) && ids.has(id));
+    if (b) return { categorie_id: b[1], origine: 'banque', marque: '' };
+    return { categorie_id: 'cat-autre', origine: 'défaut', marque: '' };
+  }
+  const categoriser = (categories, t, type) => categoriserOp(categories, t, type).categorie_id;
+  // Nom du commerçant pour regrouper les opérations (marque connue, sinon libellé sans chiffres ni mots génériques)
+  function cleMarchand(t) {
+    const up = majOp(t);
+    const r = REGLES_MARCHANDS.find(([re, , m]) => m && re.test(up));
+    if (r) return r[2];
+    const base = normText(t.desc || t.detail).toUpperCase().replace(/\d+/g, ' ')
+      .replace(/\b(PRLV|SEPA|CB|CARTE|PAIEMENT|PAIEMT|FACTURE|ACHAT|VIR|VIREMENT|DE|DU|LA|LE|LES|SAS|SARL|SA|FR|EUR)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    return base.split(' ').slice(0, 3).join(' ') || '—';
+  }
+  const mediane = a => { const s = a.slice().sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
+  const frequenceDe = jours => jours >= 5 && jours <= 9 ? 'hebdo' : jours >= 24 && jours <= 37 ? 'mensuel' : jours >= 54 && jours <= 68 ? 'bimestriel'
+    : jours >= 82 && jours <= 100 ? 'trimestriel' : jours >= 160 && jours <= 200 ? 'semestriel' : jours >= 330 && jours <= 400 ? 'annuel' : '';
+  const joursFreq = f => FREQUENCES[f].jours || FREQUENCES[f].mois * 30.4;
+  // Abonnements et prélèvements réguliers : même commerçant, montant proche (± 25 %), intervalle régulier.
+  // Commerçant inconnu : au moins 3 paiements ; marque d'abonnement connue : 2 (ou 1 seul paiement, « à confirmer »).
+  function detecterAbonnements(txns, today, recurrences) {
+    const groupes = {};
+    (txns || []).forEach(t => {
+      const d = toISO(t.date); if (!d || !(+t.amt < 0) || estVirementInterne(t)) return;
+      const k = cleMarchand(t); (groupes[k] = groupes[k] || []).push({ date: d, montant: round2(-t.amt), t });
+    });
+    const progs = (recurrences || []).filter(r => r.type === 'depense').map(r => normText(r.libelle));
+    const out = [];
+    Object.entries(groupes).forEach(([cle, ops]) => {
+      const connu = REGLES_MARCHANDS.some(([, , m]) => m === cle);
+      // Paquets de montants proches
+      const paquets = [];
+      ops.slice().sort((a, b) => a.montant - b.montant).forEach(o => {
+        const p = paquets.find(p => Math.abs(o.montant - mediane(p.map(x => x.montant))) <= 0.25 * mediane(p.map(x => x.montant)));
+        if (p) p.push(o); else paquets.push([o]);
+      });
+      const gros = paquets.filter(p => p.length >= 2);
+      (gros.length ? gros : connu && paquets.length === 1 ? paquets : []).forEach(p => {
+        p.sort((a, b) => a.date.localeCompare(b.date));
+        const dates = p.map(o => o.date), n = p.length;
+        const ecarts = dates.slice(1).map((d, i) => (Date.parse(d) - Date.parse(dates[i])) / 86400000);
+        let frequence = n >= 2 ? frequenceDe(mediane(ecarts)) : '';
+        if (n >= 2) {
+          if (!frequence) return;
+          const j = joursFreq(frequence), reg = ecarts.filter(e => Math.abs(e - j) <= Math.max(6, j * 0.3)).length;
+          if (reg / ecarts.length < 0.7) return;
+          if (!connu && n < 3) return;
+        } else frequence = p[0].montant >= 40 ? 'annuel' : 'mensuel';
+        const derniere = dates[n - 1], montant = p[n - 1].montant;
+        const fq = FREQUENCES[frequence];
+        const prochaine = fq.jours ? addDaysISO(derniere, fq.jours) : addMonthsISO(derniere, fq.mois);
+        const actif = Date.parse(today) - Date.parse(derniere) <= joursFreq(frequence) * 1.5 * 86400000;
+        const cat = categoriserOp([{ id: 'cat-abonnement' }, { id: 'cat-telecom' }, { id: 'cat-autre' }], p[n - 1].t, 'depense').categorie_id;
+        const nc = normText(cle);
+        out.push({ cle, libelle: cle, montant, montantMoyen: round2(p.reduce((s, o) => s + o.montant, 0) / n), frequence, nb: n,
+          premiere: dates[0], derniere, prochaine, actif, connu, confiance: n >= 3 ? 'forte' : n === 2 ? 'moyenne' : 'faible',
+          parMois: round2(montant * fq.parMois), categorie_id: connu ? (cat === 'cat-autre' ? 'cat-abonnement' : cat) : 'cat-abonnement',
+          dejaProgramme: progs.some(l => l && nc && (l.includes(nc) || nc.includes(l))) });
+      });
+    });
+    return out.sort((a, b) => (b.actif - a.actif) || b.parMois - a.parMois);
+  }
+  // Analyse d'opérations bancaires sur une période : catégories, commerçants, abonnements
+  function analyserReleve(txns, categories, today, opts = {}) {
+    const from = opts.from || '0000-00-00', to = opts.to || today;
+    const ops = (txns || []).map(t => ({ t, d: toISO(t.date) })).filter(x => x.d && x.d >= from && x.d <= to && !estVirementInterne(x.t));
+    const lignes = ops.map(({ t, d }) => {
+      const type = +t.amt >= 0 ? 'revenu' : 'depense', c = categoriserOp(categories, t, type);
+      return { date: d, libelle: t.desc || t.detail || '—', montant: round2(Math.abs(+t.amt)), type, categorie_id: c.categorie_id, origine: c.origine, marchand: cleMarchand(t), compte: t._compte || '' };
+    }).sort((a, b) => b.date.localeCompare(a.date));
+    const parCat = {}, parMarchand = {};
+    lignes.forEach(l => {
+      const c = parCat[l.categorie_id] = parCat[l.categorie_id] || { categorie_id: l.categorie_id, type: l.type, total: 0, nb: 0 };
+      c.total = round2(c.total + l.montant); c.nb++;
+      if (l.type === 'depense') { const m = parMarchand[l.marchand] = parMarchand[l.marchand] || { marchand: l.marchand, total: 0, nb: 0, categorie_id: l.categorie_id }; m.total = round2(m.total + l.montant); m.nb++; }
+    });
+    const dates = lignes.map(l => l.date).sort();
+    const debut = dates[0] || to, mois = Math.max(1, Math.round((Date.parse(to) - Date.parse(debut)) / 86400000 / 30.44));
+    const somme = type => round2(lignes.filter(l => l.type === type).reduce((s, l) => s + l.montant, 0));
+    return { debut, fin: dates[dates.length - 1] || to, mois, lignes, revenus: somme('revenu'), depenses: somme('depense'),
+      parCategorie: Object.values(parCat).sort((a, b) => b.total - a.total), marchands: Object.values(parMarchand).sort((a, b) => b.total - a.total),
+      nonClasses: lignes.filter(l => l.categorie_id === 'cat-autre' || l.categorie_id === 'cat-rev-autre').length,
+      abonnements: detecterAbonnements(ops.map(x => x.t), today, opts.recurrences) };
+  }
+  const estCarte = acc => /carte/i.test(String((acc && acc.type) || ''));
+  // Prévision sur n mois à partir de fromYm. Mois passés et en cours : réel (+ prévu restant du mois en cours).
+  // Mois futurs : revenus et dépenses programmés + enveloppes : par catégorie, max(budget mensuel, dépenses programmées).
+  function budgetForecast(data, fromYm, n, opts = {}) {
+    const rows = []; let cumul = +opts.soldeDepart || 0;
+    const curYm = opts.today.slice(0, 7);
+    const cats = (data.budget && data.budget.categories) || [];
+    for (let i = 0; i < n; i++) {
+      const ym = addMonthsYM(fromYm, i);
+      const m = budgetMonth(data, ym, Object.assign({}, opts, ym > curYm ? { source: 'saisie' } : {}));
+      let depenses = m.depenses.total, fixes = depenses, variables = 0;
+      if (ym >= curYm) {
+        // enveloppes des catégories de dépenses : ce qui n'est pas déjà programmé ce mois-ci
+        cats.filter(c => (c.type || 'depense') === 'depense' && +c.budget_mensuel > 0).forEach(c => {
+          const pc = m.parCategorie[c.id] || { reel: 0, prevu: 0 };
+          variables += Math.max(0, +c.budget_mensuel - pc.reel - pc.prevu);
+        });
+        variables = round2(variables); depenses = round2(fixes + variables);
+      }
+      const solde = round2(m.revenus.total - depenses);
+      if (ym >= curYm) cumul = round2(cumul + (ym === curYm ? m.revenus.prevu - m.depenses.prevu - variables : solde));
+      rows.push({ ym, revenus: m.revenus.total, depensesFixes: round2(fixes), depensesVariables: variables, depenses, solde, cumul: ym >= curYm ? cumul : null });
+    }
+    return rows;
+  }
+
+  // ── Bourse : ordres d'achat par an (objectif : au moins N achats par an, 12 par défaut) ──
+  function ordresAchat(operations, today, objectif) {
+    objectif = +objectif > 0 ? +objectif : 12;
+    const ans = {};
+    (operations || []).forEach(o => {
+      if (String(o.type || '').toLowerCase() !== 'achat') return;
+      const d = toISO(o.date); if (!d || d > today) return;
+      const a = ans[d.slice(0, 4)] = ans[d.slice(0, 4)] || { annee: +d.slice(0, 4), achats: 0, montant: 0, mois: {} };
+      a.achats++;
+      a.montant = round2(a.montant + (Math.abs(+o.total) || (+o.quantite || 0) * (+o.prix || 0) + (+o.frais || 0)));
+      a.mois[+d.slice(5, 7)] = (a.mois[+d.slice(5, 7)] || 0) + 1;
+    });
+    const parAn = Object.values(ans).sort((a, b) => b.annee - a.annee).map(a => Object.assign(a, { atteint: a.achats >= objectif }));
+    const y = +today.slice(0, 4), m = +today.slice(5, 7);
+    const cur = ans[y] || { annee: y, achats: 0, montant: 0, mois: {} };
+    const attendu = Math.floor(objectif * m / 12);           // rythme régulier : à la fin de ce mois-ci
+    const moisSansAchat = []; for (let k = 1; k <= m; k++) if (!cur.mois[k]) moisSansAchat.push(k);
+    return { objectif, parAn, courant: { annee: y, achats: cur.achats, montant: cur.montant, mois: cur.mois, reste: Math.max(0, objectif - cur.achats),
+      attendu, enRetard: cur.achats < attendu, atteint: cur.achats >= objectif, moisSansAchat } };
+  }
+
+  // ── Véhicule : dépenses, pleins, consommation ──
+  const VEHICULE_TYPES = { carte_grise: 'Carte grise', assurance: 'Assurance', entretien: 'Entretien', controle_technique: 'Contrôle technique',
+    reparation: 'Réparation', pneus: 'Pneus', peage: 'Péage', stationnement: 'Stationnement', lavage: 'Lavage', equipement: 'Équipement', autre: 'Autre' };
+  const pleinMontant = p => round2(+p.montant || (+p.litres || 0) * (+p.prixLitre || 0));
+  function vehiculeStats(v, today) {
+    const pleins = (v.pleins || []).filter(p => toISO(p.date)).slice().sort((a, b) => (toISO(a.date) + String(1e9 + (+a.km || 0))).localeCompare(toISO(b.date) + String(1e9 + (+b.km || 0))));
+    const depenses = (v.depenses || []).filter(e => toISO(e.date));
+    const litresTotal = round2(pleins.reduce((s, p) => s + (+p.litres || 0), 0));
+    const carburant = round2(pleins.reduce((s, p) => s + pleinMontant(p), 0));
+    // Consommation entre deux pleins complets : litres remis depuis le plein complet précédent / km parcourus
+    const consos = []; let prev = null, litres = 0;
+    pleins.forEach(p => {
+      if (prev) litres += +p.litres || 0;
+      if (p.complet !== false && +p.km > 0) {
+        if (prev && +p.km > +prev.km && litres > 0) consos.push({ date: toISO(p.date), km: +p.km, distance: +p.km - +prev.km, litres: round2(litres), conso: round2(litres / (+p.km - +prev.km) * 100) });
+        prev = p; litres = 0;
+      }
+    });
+    const dist = consos.reduce((s, c) => s + c.distance, 0), lit = consos.reduce((s, c) => s + c.litres, 0);
+    const kms = [+v.kmAchat || 0].concat(pleins.map(p => +p.km || 0), depenses.map(e => +e.km || 0)).filter(k => k > 0);
+    const kmActuel = kms.length ? Math.max(...kms) : 0;
+    const kmParcourus = kmActuel && +v.kmAchat >= 0 ? Math.max(0, kmActuel - (+v.kmAchat || 0)) : 0;
+    const parType = {};
+    depenses.forEach(e => { parType[e.type] = round2((parType[e.type] || 0) + (+e.montant || 0)); });
+    parType.carburant = carburant;
+    const coutUsage = round2(Object.values(parType).reduce((s, x) => s + x, 0));
+    const parMois = {};
+    pleins.forEach(p => { const k = toISO(p.date).slice(0, 7); parMois[k] = round2((parMois[k] || 0) + pleinMontant(p)); });
+    depenses.forEach(e => { const k = toISO(e.date).slice(0, 7); parMois[k] = round2((parMois[k] || 0) + (+e.montant || 0)); });
+    // Rappels : contrôle technique (4 ans après la mise en circulation, puis tous les 2 ans), entretien
+    const last = type => depenses.filter(e => e.type === type).map(e => ({ date: toISO(e.date), km: +e.km || 0 })).sort((a, b) => b.date.localeCompare(a.date))[0];
+    const ct = last('controle_technique'), mec = toISO(v.dateMiseEnCirculation);
+    const prochainCT = ct ? addMonthsISO(ct.date, 24) : mec ? addMonthsISO(mec, 48) : null;
+    const ent = last('entretien'), ik = +v.entretienKm || 0, im = +v.entretienMois || 0;
+    const prochainEntretien = { km: ent && ik ? ent.km + ik : (ik && +v.kmAchat >= 0 && !ent ? (+v.kmAchat || 0) + ik : null),
+      date: ent && im ? addMonthsISO(ent.date, im) : (im && toISO(v.dateAchat) && !ent ? addMonthsISO(toISO(v.dateAchat), im) : null) };
+    const prixMoyenLitre = litresTotal > 0 ? round2(carburant / litresTotal * 1000) / 1000 : null;
+    return { kmActuel, kmParcourus, litresTotal, carburant, prixMoyenLitre,
+      consoMoyenne: dist > 0 ? round2(lit / dist * 100) : null, derniereConso: consos.length ? consos[consos.length - 1].conso : null, consos,
+      coutCarburant100: dist > 0 && prixMoyenLitre ? round2(lit / dist * 100 * prixMoyenLitre) : null,
+      parType, coutUsage, coutParKm: kmParcourus > 0 ? round2(coutUsage / kmParcourus * 100) / 100 : null, parMois,
+      prochainCT, ctEnRetard: !!(prochainCT && prochainCT < today), prochainEntretien,
+      entretienAFaire: !!((prochainEntretien.km && kmActuel >= prochainEntretien.km) || (prochainEntretien.date && prochainEntretien.date <= today)) };
+  }
+
   // ── Versions du format des données ──
   const MIGRATIONS = [
     { to: 2, label: 'Accents réparés, dates des opérations en ISO, soldes datés, journal des imports',
@@ -4359,6 +4740,43 @@ const EmeraudeCore = (() => {
         const pf = d.portefeuille = d.portefeuille || {};
         if (!pf.coursHist || typeof pf.coursHist !== 'object') pf.coursHist = {};
         if (!pf.valeurJour || typeof pf.valeurJour !== 'object') pf.valeurJour = {};
+      } },
+    { to: 5, label: 'Budget : revenus et dépenses programmés, opérations, catégories de revenus ; véhicules',
+      run(d, today) {
+        const B = d.budget = d.budget && typeof d.budget === 'object' ? d.budget : {};
+        B.categories = Array.isArray(B.categories) ? B.categories : [];
+        B.categories.forEach(c => { if (!c.type) c.type = 'depense'; if (!Array.isArray(c.motsCles)) c.motsCles = []; });
+        [['cat-credits', 'Crédits', '🏦', '#64748B', 'depense'], ['cat-vehicule', 'Véhicule', '🚗', '#0EA5E9', 'depense'],
+         ['cat-carburant', 'Carburant', '⛽', '#F97316', 'depense'], ['cat-impots', 'Impôts', '🧾', '#A855F7', 'depense'],
+         ['cat-autre', 'Autre', '📦', '#94A3B8', 'depense'], ['cat-rev-salaire', 'Salaire', '💼', '#10B981', 'revenu'],
+         ['cat-rev-loyers', 'Loyers perçus', '🏠', '#22C55E', 'revenu'], ['cat-rev-placements', 'Placements', '📈', '#14B8A6', 'revenu'],
+         ['cat-rev-autre', 'Autres revenus', '💰', '#84CC16', 'revenu']].forEach(([id, nom, icone, couleur, type]) => {
+          if (!B.categories.some(c => c.id === id)) B.categories.push({ id, nom, icone, couleur, type, budget_mensuel: 0, motsCles: [] });
+        });
+        if (!Array.isArray(B.recurrences)) B.recurrences = [];
+        if (!Array.isArray(B.operations)) B.operations = [];
+        // Anciennes « sources de revenus » (montant mensuel sans date) → revenus programmés à partir de ce mois
+        (B.revenus || []).forEach(r => B.recurrences.push({ id: r.id || uid('rec'), type: 'revenu', libelle: clean(r.source) || 'Revenu', montant: +r.montant || 0,
+          categorie_id: /salaire/i.test(r.source) ? 'cat-rev-salaire' : /loyer/i.test(r.source) ? 'cat-rev-loyers' : /dividende|int[eé]r[eê]t/i.test(r.source) ? 'cat-rev-placements' : 'cat-rev-autre',
+          frequence: FREQUENCES[r.recurrence] ? r.recurrence : 'mensuel', dateDebut: today.slice(0, 8) + '01', actif: true, exceptions: {},
+          notes: r.recurrence === 'variable' ? 'Montant variable : estimation' : '' }));
+        // Anciennes dépenses → opérations
+        (B.depenses || []).forEach(x => B.operations.push({ id: x.id || uid('op'), date: toISO(x.date) || x.date, type: 'depense', libelle: clean(x.desc), montant: +x.montant || 0, categorie_id: x.categorie_id || 'cat-autre' }));
+        delete B.revenus; delete B.depenses;
+        if (!B.reglages) B.reglages = { source: 'saisie', inclureEmprunts: true, comptes: [] };
+        if (!Array.isArray(d.vehicules)) d.vehicules = [];
+      } },
+    { to: 6, label: 'Budget : catégories pour le classement automatique des relevés bancaires',
+      run(d) {
+        const B = d.budget = d.budget && typeof d.budget === 'object' ? d.budget : {};
+        B.categories = Array.isArray(B.categories) ? B.categories : [];
+        [['cat-alim', 'Alimentation', '🛒', '#F59E0B'], ['cat-restaurant', 'Restaurants & sorties', '🍽', '#FB7185'], ['cat-transport', 'Transports', '🚆', '#38BDF8'],
+         ['cat-voyage', 'Voyages', '✈', '#06B6D4'], ['cat-logement', 'Logement & énergie', '🏠', '#A3E635'], ['cat-maison', 'Maison & équipement', '🛠', '#EAB308'],
+         ['cat-shopping', 'Shopping', '🛍', '#EC4899'], ['cat-sante', 'Santé', '💊', '#22D3EE'], ['cat-soins', 'Soins & beauté', '💇', '#F472B6'],
+         ['cat-loisirs', 'Loisirs & culture', '🎭', '#8B5CF6'], ['cat-abonnement', 'Abonnements', '📺', '#6366F1'], ['cat-telecom', 'Téléphone & internet', '📱', '#0EA5E9'],
+         ['cat-banque', 'Banque & frais', '🏦', '#94A3B8']].forEach(([id, nom, icone, couleur]) => {
+          if (!B.categories.some(c => c.id === id)) B.categories.push({ id, nom, icone, couleur, type: 'depense', budget_mensuel: 0, motsCles: [] });
+        });
       } },
   ];
   function migrate(d, today) {
@@ -4531,7 +4949,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
 })();
 // IMPORT_CORE_END
 
@@ -4879,7 +5297,7 @@ function ensureBiensFixes() {
       valeurAchat: 0, loyerMensuel: 0, pretIds: [], compteId: '', vacanceMois: 0, regime: '', impotAnnuel: 0, revenus: [], charges: [] });
   });
 }
-function ensureDataShape() {
+function ensureDataShape(opts) {
   if (!Array.isArray(DATA.transactions)) DATA.transactions = [];
   if (!Array.isArray(DATA.factures)) DATA.factures = [];
   if (!Array.isArray(DATA.banks)) DATA.banks = [];
@@ -4913,7 +5331,7 @@ function ensureDataShape() {
   const mig = EmeraudeCore.migrate(DATA, todayISO());
   DATA_TOO_NEW = !!mig.tooNew;
   ensureBiensFixes();
-  if (mig.applied.length) {
+  if (mig.applied.length && !(opts && opts.noSave)) {
     // Enregistré localement seulement : le fichier partagé sera mis à niveau à la prochaine modification
     try { localStorage.setItem('emeraude-data', JSON.stringify(DATA)); } catch(e) {}
   }
@@ -4930,7 +5348,9 @@ function replaceDataSnapshot(d) {
 function loadData() {
   try {
     const s = localStorage.getItem('emeraude-data');
-    if (!s) return;
+    // Premier lancement : données par défaut mises au format courant, sans rien enregistrer (une
+    // donnée locale serait vue comme « modifiée » et pourrait écraser le fichier synchronisé)
+    if (!s) { ensureDataShape({ noSave: true }); return; }
     const d = JSON.parse(s);
     Object.keys(d).forEach(k => { if (!k.startsWith('_')) DATA[k] = d[k]; });
     ensureDataShape();
@@ -5464,7 +5884,7 @@ function renderBanque() {
           ${bank.accounts.length} compte${bank.accounts.length>1?'s':''}
         </div>
       </div>
-      <div class="hero-dec✓ style="font-size:100px;right:-10px;opacity:0.025">$</div>
+      <div class="hero-deco" style="font-size:100px;right:-10px;opacity:0.025">$</div>
     </div>
   </div>`;
 
@@ -5785,221 +6205,601 @@ function renderBanque() {
 // ......................................
 // BUDGET
 // ......................................
+// Revenus et dépenses : saisies, programmés (abonnements, salaire… enregistrés automatiquement à leur
+// date), échéances des prêts, dépenses du véhicule ; prévision sur 12 mois. Calculs : EmeraudeCore
+// (occurrences, budgetMonth, budgetForecast), testés.
+const BUDGET_UI = { ym: null, tab: 'mois', form: null };
+const BUD_TABS = [['mois', 'Mois', '📅'], ['releves', 'Relevés & abonnements', '🧾'], ['prevision', 'Prévisions', '🔭'], ['programmes', 'Programmés & abonnements', '🔁'], ['categories', 'Catégories', '🏷'], ['reglages', 'Réglages', '⚙']];
+const BUD_SOURCES = { manuel: ['Saisie', '#94A3B8'], auto: ['Programmé', '#10B981'], pret: ['Prêt', '#64748B'], vehicule: ['Véhicule', '#0EA5E9'], banque: ['Banque', '#A78BFA'] };
+const budB = () => DATA.budget;
+const budCtx = () => ({ today: todayISO(), source: (budB().reglages || {}).source || 'saisie', inclureEmprunts: (budB().reglages || {}).inclureEmprunts !== false, comptes: (budB().reglages || {}).comptes || [] });
+const budCat = id => (budB().categories || []).find(c => c.id === id) || { id, nom: id === 'cat-rev-autre' ? 'Autres revenus' : 'Autre', icone: '📦', couleur: '#94A3B8' };
+const budCats = type => (budB().categories || []).filter(c => (c.type || 'depense') === type);
+const budMonthLabel = ym => new Date(ym + '-15T12:00:00').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+const budPct = v => v == null || !isFinite(v) ? '—' : (v * 100).toFixed(1).replace('.', ',') + ' %';
+const budComptesCourants = () => { let s = 0; (DATA.banks || []).forEach(b => (b.accounts || []).forEach(a => { if (/courant/i.test(a.type || '')) s += +a.solde || 0; })); return Math.round(s * 100) / 100; };
+function budId(p) { return p + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+function budSave() { saveData(); render(); renderBudget(); }
+
+function budSetMonth(delta) { const cur = BUDGET_UI.ym || todayISO().slice(0, 7); BUDGET_UI.ym = delta === 0 ? todayISO().slice(0, 7) : EmeraudeCore.toISO(cur + '-01') && new Date(Date.UTC(+cur.slice(0, 4), +cur.slice(5, 7) - 1 + delta, 1)).toISOString().slice(0, 7); renderBudget(); }
+function budSetTab(t) { BUDGET_UI.tab = t; BUDGET_UI.form = null; BUDGET_UI.toast = ''; renderBudget(); }
+
+// ── Formulaires (brouillon dans BUDGET_UI.form ; champs simples sans re-rendu pour garder le focus) ──
+function budNew(kind, type) {
+  const today = todayISO();
+  const defCat = type === 'revenu' ? 'cat-rev-salaire' : 'cat-autre';
+  BUDGET_UI.form = kind === 'op' ? { kind, d: { id: null, date: today, type, libelle: '', montant: 0, categorie_id: defCat, notes: '' } }
+    : kind === 'rec' ? { kind, d: { id: null, type, libelle: '', montant: 0, categorie_id: type === 'depense' ? 'cat-abonnement' : defCat, frequence: 'mensuel', dateDebut: today, dateFin: '', actif: true, exceptions: {}, notes: '' } }
+    : { kind, d: { id: null, nom: '', icone: type === 'revenu' ? '💰' : '🏷', couleur: '#10B981', type, budget_mensuel: 0, motsCles: [] } };
+  if (kind === 'rec' && !budCat(BUDGET_UI.form.d.categorie_id).nom) BUDGET_UI.form.d.categorie_id = defCat;
+  renderBudget();
+  document.getElementById('budget-root')?.scrollIntoView({ behavior: 'smooth' });
+}
+function budEdit(kind, id) {
+  const list = kind === 'op' ? budB().operations : kind === 'rec' ? budB().recurrences : budB().categories;
+  const x = list.find(o => o.id === id); if (!x) return;
+  BUDGET_UI.form = { kind, d: JSON.parse(JSON.stringify(x)) };
+  if (kind === 'cat') BUDGET_UI.form.d.motsCles = BUDGET_UI.form.d.motsCles || [];
+  renderBudget();
+  document.getElementById('budget-root')?.scrollIntoView({ behavior: 'smooth' });
+}
+function budSet(field, v, num, rerender) { const d = BUDGET_UI.form.d; d[field] = num ? (parseFloat(String(v).replace(',', '.')) || 0) : v; if (rerender) renderBudget(); }
+function budCancel() { BUDGET_UI.form = null; renderBudget(); }
+function budSubmit() {
+  const f = BUDGET_UI.form, d = f.d, B = budB();
+  if (f.kind === 'cat') {
+    if (!String(d.nom).trim()) { alert('Nom de la catégorie obligatoire.'); return; }
+    d.nom = d.nom.trim(); d.motsCles = (typeof d.motsCles === 'string' ? d.motsCles.split(',') : d.motsCles).map(s => s.trim()).filter(Boolean);
+  } else {
+    if (!String(d.libelle).trim()) { alert('Libellé obligatoire.'); return; }
+    if (!(+d.montant > 0)) { alert('Montant supérieur à 0 obligatoire (le sens revenu / dépense est donné par le type).'); return; }
+    if (!EmeraudeCore.toISO(f.kind === 'op' ? d.date : d.dateDebut)) { alert('Date obligatoire.'); return; }
+    d.libelle = d.libelle.trim();
+  }
+  const list = f.kind === 'op' ? (B.operations = B.operations || []) : f.kind === 'rec' ? (B.recurrences = B.recurrences || []) : (B.categories = B.categories || []);
+  if (d.id) { const i = list.findIndex(x => x.id === d.id); if (i >= 0) list[i] = d; }
+  else { d.id = budId(f.kind === 'op' ? 'op' : f.kind === 'rec' ? 'rec' : 'cat'); list.push(d); }
+  BUDGET_UI.form = null;
+  budSave();
+}
+function budDelete(kind, id) {
+  const B = budB();
+  if (kind === 'cat') {
+    if (['cat-autre', 'cat-rev-autre', 'cat-credits', 'cat-vehicule', 'cat-carburant'].includes(id)) { alert('Catégorie utilisée par l’application : elle ne peut pas être supprimée.'); return; }
+    const c = B.categories.find(x => x.id === id); if (!c || !confirm(`Supprimer la catégorie « ${c.nom} » ? Ses opérations passent dans « Autre ».`)) return;
+    const repli = (c.type || 'depense') === 'revenu' ? 'cat-rev-autre' : 'cat-autre';
+    (B.operations || []).forEach(o => { if (o.categorie_id === id) o.categorie_id = repli; });
+    (B.recurrences || []).forEach(o => { if (o.categorie_id === id) o.categorie_id = repli; });
+    B.categories = B.categories.filter(x => x.id !== id);
+  } else {
+    const key = kind === 'op' ? 'operations' : 'recurrences';
+    const x = (B[key] || []).find(o => o.id === id);
+    if (!x || !confirm(kind === 'rec' ? `Supprimer « ${x.libelle} » ? Toutes ses occurrences (passées et futures) disparaissent du budget. Pour l’arrêter seulement à partir d’une date, renseignez plutôt sa date de fin.` : `Supprimer « ${x.libelle} » ?`)) return;
+    B[key] = B[key].filter(o => o.id !== id);
+  }
+  budSave();
+}
+function budToggleRec(id) { const r = (budB().recurrences || []).find(x => x.id === id); if (r) { r.actif = r.actif === false; budSave(); } }
+// Une occurrence d'un programmé : l'ignorer ou en changer le montant (ex. facture plus élevée ce mois-ci)
+function budOcc(recId, date, action) {
+  const r = (budB().recurrences || []).find(x => x.id === recId); if (!r) return;
+  r.exceptions = r.exceptions || {};
+  if (action === 'annuler') { if (!confirm(`Ignorer « ${r.libelle} » du ${EmeraudeCore.isoToFr(date)} ?`)) return; r.exceptions[date] = { annule: true }; }
+  else if (action === 'retablir') delete r.exceptions[date];
+  else {
+    const cur = r.exceptions[date] && r.exceptions[date].montant != null ? r.exceptions[date].montant : r.montant;
+    const v = prompt(`Montant de « ${r.libelle} » pour le ${EmeraudeCore.isoToFr(date)} :`, String(cur).replace('.', ','));
+    if (v == null) return;
+    const n = parseFloat(v.replace(',', '.'));
+    if (!(n >= 0)) { alert('Montant invalide.'); return; }
+    r.exceptions[date] = { montant: n };
+  }
+  budSave();
+}
+function budReglage(field, v) { const B = budB(); B.reglages = Object.assign({ source: 'saisie', inclureEmprunts: true, comptes: [] }, B.reglages); B.reglages[field] = v; budSave(); }
+function budToggleCompte(id, on) {
+  const B = budB(); B.reglages = Object.assign({ source: 'saisie', inclureEmprunts: true, comptes: [] }, B.reglages);
+  const s = new Set(B.reglages.comptes); if (on) s.add(id); else s.delete(id); B.reglages.comptes = [...s]; budSave();
+}
+
+// ── Rendus ──
+const budBadge = s => { const [l, c] = BUD_SOURCES[s] || [s, '#94A3B8']; return `<span style="font-size:0.62rem;padding:1px 7px;border-radius:9px;border:1px solid ${c}66;color:${c}">${l}</span>`; };
+const budCatTag = id => { const c = budCat(id); return `<span style="font-size:0.7rem;white-space:nowrap">${impEsc(c.icone || '')} ${impEsc(c.nom)}</span>`; };
+const budMoney = (n, type) => `<span class="${type === 'revenu' ? 'amt-pos' : 'amt-neg'}" style="white-space:nowrap">${type === 'revenu' ? '+' : '−'}${impMoney(n)}</span>`;
+function budDonut(slices) {
+  const total = slices.reduce((s, x) => s + x.v, 0);
+  if (!(total > 0)) return '<div style="font-size:0.72rem;color:var(--text-4)">Aucune dépense.</div>';
+  const R = 42, r = 26; let ang = -Math.PI / 2, paths = '';
+  slices.forEach(s => {
+    const th = Math.min(s.v / total * 2 * Math.PI, 2 * Math.PI - 0.0001), lg = th > Math.PI ? 1 : 0;
+    const p = (rad, a) => `${(Math.cos(a) * rad).toFixed(2)},${(Math.sin(a) * rad).toFixed(2)}`;
+    paths += `<path d="M${p(r, ang)} A${r},${r} 0 ${lg} 1 ${p(r, ang + th)} L${p(R, ang + th)} A${R},${R} 0 ${lg} 0 ${p(R, ang)} Z" fill="${impEsc(s.c)}" opacity="0.85"><title>${impEsc(s.l)} · ${impMoney(s.v)} (${Math.round(s.v / total * 100)} %)</title></path>`;
+    ang += th;
+  });
+  return `<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center"><svg viewBox="-45 -45 90 90" width="140" height="140">${paths}</svg>
+    <div style="font-size:0.7rem;color:var(--text-3);line-height:1.7">${slices.map(s => `<div><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${impEsc(s.c)};margin-right:5px"></span>${impEsc(s.l)} · ${Math.round(s.v / total * 100)} %</div>`).join('')}</div></div>`;
+}
+function budTile(lbl, val, sub, cls) { return `<div class="immo-kpi"><div class="immo-kpi-val ${cls || ''}">${val}</div><div class="immo-kpi-lbl">${lbl}</div>${sub ? `<div class="immo-kpi-sub">${sub}</div>` : ''}</div>`; }
+
+function budForm() {
+  const f = BUDGET_UI.form; if (!f) return '';
+  const d = f.d;
+  const txt = (field, label, ph) => impField(label, `<input class="form-input" value="${impEsc(d[field] || '')}" placeholder="${ph || ''}" onchange="budSet('${field}', this.value)">`);
+  const num = (field, label) => impField(label, `<input class="form-input" type="number" step="0.01" min="0" value="${+d[field] || 0}" onchange="budSet('${field}', this.value, true)">`);
+  const date = (field, label) => impField(label, `<input class="form-input" type="date" value="${impEsc(d[field] || '')}" onchange="budSet('${field}', this.value)">`);
+  const catSel = () => impField('Catégorie', `<select class="form-select" onchange="budSet('categorie_id', this.value)">${budCats(d.type).map(c => `<option value="${c.id}" ${c.id === d.categorie_id ? 'selected' : ''}>${impEsc(c.icone || '')} ${impEsc(c.nom)}</option>`).join('')}</select>`);
+  const typeSel = () => impField('Type', `<select class="form-select" onchange="budSet('type', this.value, false, true); budSet('categorie_id', this.value === 'revenu' ? 'cat-rev-autre' : 'cat-autre', false, true)">${[['depense', 'Dépense'], ['revenu', 'Revenu']].map(([v, l]) => `<option value="${v}" ${d.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`);
+  let body = '', title = '';
+  if (f.kind === 'op') {
+    title = (d.id ? 'Modifier ' : 'Nouvelle ') + (d.type === 'revenu' ? 'rentrée d’argent' : 'dépense');
+    body = `<div class="form-grid">${typeSel()}${date('date', 'Date')}${txt('libelle', 'Libellé', d.type === 'revenu' ? 'Ex : remboursement' : 'Ex : courses')}${num('montant', 'Montant (€)')}${catSel()}${txt('notes', 'Note')}</div>`;
+  } else if (f.kind === 'rec') {
+    title = (d.id ? 'Modifier ' : 'Programmer ') + (d.type === 'revenu' ? 'un revenu' : 'une dépense') + ' récurrent(e)';
+    body = `<div style="font-size:0.68rem;color:var(--text-4);margin-bottom:10px">Enregistré automatiquement dans le budget à chaque échéance (salaire, loyer, abonnement, assurance…). Une échéance précise peut ensuite être ignorée ou modifiée depuis la vue du mois.</div>
+      <div class="form-grid">${typeSel()}${txt('libelle', 'Libellé', d.type === 'revenu' ? 'Ex : salaire' : 'Ex : Netflix')}${num('montant', 'Montant par échéance (€)')}${catSel()}
+      ${impField('Fréquence', `<select class="form-select" onchange="budSet('frequence', this.value)">${Object.entries(EmeraudeCore.FREQUENCES).map(([k, x]) => `<option value="${k}" ${d.frequence === k ? 'selected' : ''}>${x.label}</option>`).join('')}</select>`)}
+      ${date('dateDebut', 'Première échéance')}${date('dateFin', 'Dernière échéance (facultatif)')}${txt('notes', 'Note')}</div>`;
+  } else {
+    title = d.id ? `Modifier la catégorie « ${impEsc(d.nom)} »` : 'Nouvelle catégorie';
+    body = `<div class="form-grid">${typeSel()}${txt('nom', 'Nom')}${txt('icone', 'Icône (emoji)')}
+      ${impField('Couleur', `<input class="form-input" type="color" value="${impEsc(d.couleur || '#10B981')}" onchange="budSet('couleur', this.value)" style="height:36px;padding:2px">`)}
+      ${d.type === 'depense' ? num('budget_mensuel', 'Budget mensuel (€)') : ''}
+      ${impField('Mots-clés (relevés bancaires)', `<input class="form-input" value="${impEsc((d.motsCles || []).join(', '))}" placeholder="ex : carrefour, leclerc" onchange="budSet('motsCles', this.value)">`)}</div>
+      <div style="font-size:0.66rem;color:var(--text-4)">Les mots-clés servent à classer automatiquement les opérations des relevés bancaires (libellé ou catégorie de la banque).</div>`;
+  }
+  return impCard(title, body + `<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-em" onclick="budSubmit()">✓ Enregistrer</button><button class="btn btn-ghost" onclick="budCancel()">Annuler</button></div>`);
+}
+
+function budTabMois(ym) {
+  const ctx = budCtx(), m = EmeraudeCore.budgetMonth(DATA, ym, ctx), cur = ym === ctx.today.slice(0, 7);
+  const prog = (budB().recurrences || []).filter(r => r.actif !== false && r.type === 'depense');
+  const abos = prog.filter(r => r.categorie_id === 'cat-abonnement').reduce((s, r) => s + EmeraudeCore.mensualise(r), 0);
+  const envelopes = budCats('depense').filter(c => +c.budget_mensuel > 0);
+  const resteEnv = envelopes.reduce((s, c) => { const pc = m.parCategorie[c.id] || { reel: 0, prevu: 0 }; return s + Math.max(0, c.budget_mensuel - pc.reel - pc.prevu); }, 0);
+  const kpis = `<div class="immo-kpis" style="margin-bottom:14px">
+    ${budTile('Revenus', impMoney(m.revenus.total), `${impMoney(m.revenus.reel)} reçus${m.revenus.prevu ? ` · ${impMoney(m.revenus.prevu)} à venir` : ''}`, 'amt-pos')}
+    ${budTile('Dépenses', impMoney(m.depenses.total), `${impMoney(m.depenses.reel)} payées${m.depenses.prevu ? ` · ${impMoney(m.depenses.prevu)} à venir` : ''}`, 'amt-neg')}
+    ${budTile('Solde du mois', impMoney(m.solde), 'revenus − dépenses', immoCls(m.solde))}
+    ${budTile('Taux d’épargne', budPct(m.tauxEpargne), 'part des revenus non dépensée')}
+    ${budTile('Abonnements', impMoney(abos) + '/mois', impMoney(abos * 12) + ' par an')}
+    ${envelopes.length ? budTile('Reste à dépenser', impMoney(resteEnv), 'dans les budgets par catégorie') : ''}
+  </div>`;
+  // Dépenses par catégorie : réel + à venir face au budget
+  const cats = Object.entries(m.parCategorie).map(([id, x]) => Object.assign({ id }, x, { c: budCat(id) }))
+    .filter(x => (x.c.type || 'depense') === 'depense' && (x.reel || x.prevu || x.budget)).sort((a, b) => (b.reel + b.prevu) - (a.reel + a.prevu));
+  const catRows = cats.map(x => {
+    const tot = x.reel + x.prevu, base = Math.max(tot, x.budget, 1), over = x.budget > 0 && tot > x.budget;
+    return `<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:8px;font-size:0.78rem;color:var(--text-2);margin-bottom:3px">
+      <span>${impEsc(x.c.icone || '')} ${impEsc(x.c.nom)}</span>
+      <span><strong style="color:${over ? '#EF4444' : 'var(--text-1)'}">${impMoney(tot)}</strong>${x.budget ? ` <span style="color:var(--text-4)">/ ${impMoney(x.budget)}</span>` : ''}</span></div>
+      <div class="immo-bar" style="height:10px">
+        <div class="immo-seg" style="width:${(x.reel / base * 100).toFixed(1)}%;background:${impEsc(x.c.couleur || '#10B981')}"></div>
+        <div class="immo-seg" style="width:${(x.prevu / base * 100).toFixed(1)}%;background:${impEsc(x.c.couleur || '#10B981')};opacity:0.35"></div>
+        ${x.budget ? `<div class="immo-bar-mark" style="left:${Math.min(99.5, x.budget / base * 100).toFixed(1)}%" title="Budget"></div>` : ''}</div></div>`;
+  }).join('') || '<div style="font-size:0.75rem;color:var(--text-4)">Aucune dépense ce mois-ci.</div>';
+  const donut = budDonut(cats.filter(x => x.reel + x.prevu > 0).map(x => ({ l: x.c.nom, v: x.reel + x.prevu, c: x.c.couleur || '#10B981' })));
+  const revCats = Object.entries(m.parCategorie).map(([id, x]) => Object.assign({ id }, x, { c: budCat(id) })).filter(x => x.c.type === 'revenu' && (x.reel || x.prevu));
+  // Opérations du mois
+  const rows = m.items.slice().reverse().map(i => {
+    let actions = '';
+    if (i.source === 'manuel') actions = `<button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budEdit('op','${impEsc(i.ref)}')" title="Modifier">✎</button><button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem;color:#FCA5A5" onclick="budDelete('op','${impEsc(i.ref)}')" title="Supprimer">🗑</button>`;
+    else if (i.source === 'auto') { const [rid, dt] = i.ref.split('|'); actions = `<button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budOcc('${impEsc(rid)}','${dt}','montant')" title="Changer le montant de cette échéance">✎</button><button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budOcc('${impEsc(rid)}','${dt}','annuler')" title="Ignorer cette échéance">⊘</button>`; }
+    return `<tr style="${i.statut === 'prevu' ? 'opacity:0.6' : ''}"><td style="white-space:nowrap">${EmeraudeCore.isoToFr(i.date)}</td><td>${impEsc(i.libelle)}</td><td>${budCatTag(i.categorie_id)}</td>
+      <td>${budBadge(i.source)}${i.statut === 'prevu' ? ' <span style="font-size:0.62rem;color:var(--gold-base)">à venir</span>' : ''}</td><td style="text-align:right">${budMoney(i.montant, i.type)}</td><td style="text-align:right;white-space:nowrap">${actions}</td></tr>`;
+  });
+  const sourceNote = m.source === 'banque' ? 'Source du réel : relevés bancaires des comptes choisis (Réglages) + saisies ; les programmés ne servent qu’aux échéances à venir.'
+    : 'Source du réel : saisies + programmés (enregistrés à leur date) + échéances des prêts + dépenses du véhicule.';
+  return kpis
+    + `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="btn btn-em" onclick="budNew('op','depense')">➕ Dépense</button><button class="btn btn-em" onclick="budNew('op','revenu')">➕ Rentrée d’argent</button>
+        <button class="btn btn-ghost" onclick="budNew('rec','depense')">🔁 Programmer une dépense</button><button class="btn btn-ghost" onclick="budNew('rec','revenu')">🔁 Programmer un revenu</button></div>`
+    + `<div class="immo-grid" style="margin-top:0;margin-bottom:14px">
+        <div class="immo-sec"><div class="immo-sec-t">Dépenses par catégorie${cur ? ' (payé + à venir)' : ''}</div>${catRows}
+          <div class="immo-legend" style="margin-top:6px"><span><i style="background:var(--em-bright)"></i>payé</span><span><i style="background:var(--em-bright);opacity:.35"></i>à venir</span><span><i class="immo-legend-mark"></i>budget</span></div></div>
+        <div class="immo-sec"><div class="immo-sec-t">Répartition</div><div style="display:flex;justify-content:center">${donut}</div>
+          <div class="immo-sec-t" style="margin-top:12px">Revenus par catégorie</div>${revCats.map(x => immoRow(impEsc((x.c.icone || '') + ' ' + x.c.nom), impMoney(x.reel + x.prevu), 'amt-pos')).join('') || '<div style="font-size:0.72rem;color:var(--text-4)">Aucun revenu ce mois-ci.</div>'}</div></div>`
+    + `<div class="immo-sec-t" style="margin-top:6px">Opérations de ${impEsc(budMonthLabel(ym))} (${m.items.length})</div>
+       <div style="font-size:0.66rem;color:var(--text-4);margin-bottom:6px">${sourceNote}</div>`
+    + (rows.length ? impTable(['Date', 'Libellé', 'Catégorie', 'Origine', 'Montant', ''], rows) : '<div style="font-size:0.75rem;color:var(--text-4)">Aucune opération ce mois-ci.</div>');
+}
+
+function budChart(rows) {
+  const W = 640, H = 200, pad = 28, n = rows.length, bw = (W - pad * 2) / n;
+  const vals = rows.flatMap(r => [r.revenus, r.depenses]);
+  const cum = rows.map(r => r.cumul).filter(v => v != null);
+  const max = Math.max(1, ...vals), cmin = Math.min(0, ...cum), cmax = Math.max(1, ...cum);
+  const y = v => H - pad - v / max * (H - pad * 2);
+  const yc = v => H - pad - (v - cmin) / (cmax - cmin || 1) * (H - pad * 2);
+  let bars = '', pts = [];
+  rows.forEach((r, i) => {
+    const x = pad + i * bw;
+    bars += `<rect x="${(x + bw * 0.12).toFixed(1)}" y="${y(r.revenus).toFixed(1)}" width="${(bw * 0.34).toFixed(1)}" height="${(H - pad - y(r.revenus)).toFixed(1)}" fill="#10B981" opacity="0.8"><title>${budMonthLabel(r.ym)} · revenus ${impMoney(r.revenus)}</title></rect>`
+      + `<rect x="${(x + bw * 0.5).toFixed(1)}" y="${y(r.depenses).toFixed(1)}" width="${(bw * 0.34).toFixed(1)}" height="${(H - pad - y(r.depenses)).toFixed(1)}" fill="#EF4444" opacity="0.7"><title>${budMonthLabel(r.ym)} · dépenses ${impMoney(r.depenses)}</title></rect>`
+      + `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10" fill="var(--text-4)">${new Date(r.ym + '-15T12:00:00').toLocaleDateString('fr-FR', { month: 'short' })}</text>`;
+    if (r.cumul != null) pts.push(`${(x + bw / 2).toFixed(1)},${yc(r.cumul).toFixed(1)}`);
+  });
+  const line = pts.length > 1 ? `<polyline points="${pts.join(' ')}" fill="none" stroke="#DAA520" stroke-width="2"/>` + pts.map((p, i) => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3" fill="#DAA520"/>`).join('') : '';
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:230px">${bars}${line}</svg>
+    <div class="immo-legend"><span><i style="background:#10B981"></i>revenus</span><span><i style="background:#EF4444"></i>dépenses</span><span><i style="background:#DAA520"></i>solde prévu des comptes courants (fin de mois)</span></div>`;
+}
+
+function budTabPrevision() {
+  const ctx = budCtx(), today = ctx.today, cur = today.slice(0, 7), solde = budComptesCourants();
+  const rows = EmeraudeCore.budgetForecast(DATA, cur, 12, Object.assign({}, ctx, { soldeDepart: solde }));
+  const hist = EmeraudeCore.budgetForecast(DATA, new Date(Date.UTC(+cur.slice(0, 4), +cur.slice(5, 7) - 13, 1)).toISOString().slice(0, 7), 12, ctx);
+  const moy = k => rows.reduce((s, r) => s + r[k], 0) / rows.length;
+  const bas = rows.reduce((m, r) => (m == null || r.cumul < m.cumul ? r : m), null);
+  // Échéancier des 60 prochains jours
+  const fin = new Date(Date.parse(today) + 60 * 86400000).toISOString().slice(0, 10);
+  const prochaines = [0, 1, 2].flatMap(k => EmeraudeCore.budgetMonth(DATA, new Date(Date.UTC(+cur.slice(0, 4), +cur.slice(5, 7) - 1 + k, 1)).toISOString().slice(0, 7), Object.assign({}, ctx, { source: 'saisie' })).items)
+    .filter(i => i.date > today && i.date <= fin && i.source !== 'vehicule');
+  return `<div class="immo-kpis" style="margin-bottom:14px">
+      ${budTile('Comptes courants aujourd’hui', impMoney(solde), 'point de départ de la prévision')}
+      ${budTile('Revenus prévus', impMoney(moy('revenus')) + '/mois', 'moyenne sur 12 mois', 'amt-pos')}
+      ${budTile('Dépenses prévues', impMoney(moy('depenses')) + '/mois', `dont programmées ${impMoney(moy('depensesFixes'))}`, 'amt-neg')}
+      ${budTile('Épargne prévue', impMoney(moy('solde')) + '/mois', impMoney(moy('solde') * 12) + ' sur 12 mois', immoCls(moy('solde')))}
+      ${bas ? budTile('Point bas', impMoney(bas.cumul), 'fin ' + budMonthLabel(bas.ym), immoCls(bas.cumul)) : ''}
+    </div>`
+    + impCard('Les 12 prochains mois', budChart(rows) + `<div style="font-size:0.68rem;color:var(--text-4);margin:8px 0">Revenus et dépenses programmés, échéances des prêts, et pour chaque catégorie le budget mensuel quand il dépasse ce qui est déjà programmé. Mois en cours : déjà payé + reste à venir.</div>`
+      + impTable(['Mois', 'Revenus', 'Programmé', 'Budgets', 'Solde', 'Comptes courants'], rows.map(r => `<tr><td>${impEsc(budMonthLabel(r.ym))}</td><td style="text-align:right" class="amt-pos">${impMoney(r.revenus)}</td>
+        <td style="text-align:right">${impMoney(r.depensesFixes)}</td><td style="text-align:right">${impMoney(r.depensesVariables)}</td>
+        <td style="text-align:right" class="${immoCls(r.solde)}">${impMoney(r.solde)}</td><td style="text-align:right" class="${immoCls(r.cumul)}"><strong>${impMoney(r.cumul)}</strong></td></tr>`)))
+    + impCard(`Échéancier : 60 prochains jours (${prochaines.length})`, prochaines.length ? impTable(['Date', 'Libellé', 'Catégorie', 'Origine', 'Montant'], prochaines.map(i =>
+      `<tr><td style="white-space:nowrap">${EmeraudeCore.isoToFr(i.date)}</td><td>${impEsc(i.libelle)}</td><td>${budCatTag(i.categorie_id)}</td><td>${budBadge(i.source)}</td><td style="text-align:right">${budMoney(i.montant, i.type)}</td></tr>`))
+      : '<div style="font-size:0.75rem;color:var(--text-4)">Rien de programmé : ajoutez vos revenus et dépenses récurrents (onglet « Programmés & abonnements »).</div>')
+    + impCard('Les 12 derniers mois (réel)', (hist.some(r => r.revenus || r.depenses) ? budChart(hist.map(r => Object.assign({}, r, { cumul: null }))) : '<div style="font-size:0.72rem;color:var(--text-4);margin-bottom:8px">Pas encore d’historique : il se remplit avec vos saisies, vos programmés et vos prêts (ou les relevés bancaires, selon les Réglages).</div>') + impTable(['Mois', 'Revenus', 'Dépenses', 'Solde', 'Taux d’épargne'],
+      hist.map(r => `<tr><td>${impEsc(budMonthLabel(r.ym))}</td><td style="text-align:right" class="amt-pos">${impMoney(r.revenus)}</td><td style="text-align:right" class="amt-neg">${impMoney(r.depenses)}</td>
+        <td style="text-align:right" class="${immoCls(r.solde)}">${impMoney(r.solde)}</td><td style="text-align:right">${budPct(r.revenus > 0 ? r.solde / r.revenus : null)}</td></tr>`)));
+}
+
+function budTabProgrammes() {
+  const today = todayISO(), recs = budB().recurrences || [];
+  const next = r => { const o = EmeraudeCore.occurrences(r, today, new Date(Date.parse(today) + 400 * 86400000).toISOString().slice(0, 10)); return o[0] ? EmeraudeCore.isoToFr(o[0].date) : '—'; };
+  const totalM = type => recs.filter(r => r.type === type && r.actif !== false).reduce((s, r) => s + EmeraudeCore.mensualise(r), 0);
+  const table = type => {
+    const list = recs.filter(r => r.type === type).sort((a, b) => EmeraudeCore.mensualise(b) - EmeraudeCore.mensualise(a));
+    return list.length ? impTable(['Libellé', 'Catégorie', 'Montant', 'Fréquence', 'Prochaine', '≈ par mois', ''], list.map(r => `<tr style="${r.actif === false ? 'opacity:0.45' : ''}">
+      <td>${impEsc(r.libelle)}${r.notes ? `<div style="font-size:0.62rem;color:var(--text-4)">${impEsc(r.notes)}</div>` : ''}</td><td>${budCatTag(r.categorie_id)}</td>
+      <td style="text-align:right;white-space:nowrap">${impMoney(r.montant)}</td><td style="white-space:nowrap">${impEsc((EmeraudeCore.FREQUENCES[r.frequence] || {}).label || r.frequence)}${r.dateFin ? `<div style="font-size:0.62rem;color:var(--text-4)">jusqu’au ${EmeraudeCore.isoToFr(r.dateFin)}</div>` : ''}</td>
+      <td style="white-space:nowrap">${r.actif === false ? 'suspendu' : next(r)}</td><td style="text-align:right;white-space:nowrap">${impMoney(EmeraudeCore.mensualise(r))}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budToggleRec('${impEsc(r.id)}')" title="${r.actif === false ? 'Reprendre' : 'Suspendre'}">${r.actif === false ? '▶' : '⏸'}</button>
+        <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budEdit('rec','${impEsc(r.id)}')" title="Modifier">✎</button>
+        <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem;color:#FCA5A5" onclick="budDelete('rec','${impEsc(r.id)}')" title="Supprimer">🗑</button></td></tr>`))
+      : `<div style="font-size:0.75rem;color:var(--text-4)">Aucun ${type === 'revenu' ? 'revenu' : 'dépense'} programmé.</div>`;
+  };
+  const abos = recs.filter(r => r.actif !== false && r.type === 'depense' && r.categorie_id === 'cat-abonnement');
+  const prets = (DATA.prets || []).map(p => ({ p, l: EmeraudeCore.loanAt(p, today) })).filter(x => x.l.crd > 0);
+  return `<div class="immo-kpis" style="margin-bottom:14px">
+      ${budTile('Revenus programmés', impMoney(totalM('revenu')) + '/mois', '', 'amt-pos')}
+      ${budTile('Dépenses programmées', impMoney(totalM('depense')) + '/mois', impMoney(totalM('depense') * 12) + ' par an', 'amt-neg')}
+      ${budTile('Abonnements', impMoney(abos.reduce((s, r) => s + EmeraudeCore.mensualise(r), 0)) + '/mois', `${abos.length} abonnement(s) · ${impMoney(abos.reduce((s, r) => s + EmeraudeCore.mensualise(r), 0) * 12)}/an`)}
+      ${budTile('Échéances de prêts', impMoney(prets.reduce((s, x) => s + x.l.mensualite, 0)) + '/mois', 'comptées automatiquement (page Emprunts)')}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn btn-em" onclick="budNew('rec','revenu')">🔁 Programmer un revenu</button><button class="btn btn-em" onclick="budNew('rec','depense')">🔁 Programmer une dépense / un abonnement</button></div>`
+    + impCard('Revenus programmés', table('revenu'))
+    + impCard('Dépenses programmées et abonnements', table('depense'))
+    + impCard('Échéances des prêts (automatiques)', prets.length ? impTable(['Prêt', 'Phase', 'Échéance actuelle', 'Restant dû'], prets.map(x => `<tr><td>${impEsc(x.p.nom || 'Prêt')}</td><td>${impEsc(x.l.phase)}</td><td style="text-align:right">${impMoney(x.l.mensualite)}</td><td style="text-align:right">${impMoney(x.l.crd)}</td></tr>`))
+      + `<div style="font-size:0.66rem;color:var(--text-4);margin-top:6px">Ajoutées au budget à leur date (désactivable dans Réglages). Prêt relais TVA : seuls les intérêts comptent.</div>` : '<div style="font-size:0.75rem;color:var(--text-4)">Aucun prêt en cours.</div>');
+}
+
+function budTabCategories() {
+  const ym = BUDGET_UI.ym, m = EmeraudeCore.budgetMonth(DATA, ym, budCtx());
+  const table = type => impTable(['Catégorie', type === 'depense' ? 'Budget mensuel' : '', `Ce mois (${impEsc(budMonthLabel(ym))})`, 'Mots-clés', ''], budCats(type).map(c => {
+    const x = m.parCategorie[c.id] || { reel: 0, prevu: 0 };
+    return `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${impEsc(c.couleur || '#10B981')};margin-right:6px"></span>${impEsc(c.icone || '')} ${impEsc(c.nom)}</td>
+      <td style="text-align:right">${type === 'depense' ? (c.budget_mensuel ? impMoney(c.budget_mensuel) : '—') : ''}</td><td style="text-align:right">${impMoney(x.reel + x.prevu)}</td>
+      <td style="font-size:0.68rem;color:var(--text-4)">${impEsc((c.motsCles || []).join(', '))}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budEdit('cat','${impEsc(c.id)}')">✎</button>
+        <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem;color:#FCA5A5" onclick="budDelete('cat','${impEsc(c.id)}')">🗑</button></td></tr>`;
+  }));
+  const totBudget = budCats('depense').reduce((s, c) => s + (+c.budget_mensuel || 0), 0);
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><button class="btn btn-em" onclick="budNew('cat','depense')">➕ Catégorie de dépense</button><button class="btn btn-ghost" onclick="budNew('cat','revenu')">➕ Catégorie de revenu</button></div>`
+    + impCard(`Dépenses · budgets mensuels : ${impMoney(totBudget)}`, table('depense'))
+    + impCard('Revenus', table('revenu'));
+}
+
+function budTabReglages() {
+  const r = Object.assign({ source: 'saisie', inclureEmprunts: true, comptes: [] }, budB().reglages);
+  const comptes = []; (DATA.banks || []).forEach(b => (b.accounts || []).forEach(a => comptes.push({ id: a.id, nom: `${b.name} › ${a.nom}`, courant: /courant/i.test(a.type || ''), carte: EmeraudeCore.estCarte(a), nb: (a.txns || []).length })));
+  const radio = (v, l, sub) => `<label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;cursor:pointer"><input type="radio" name="bud-src" ${r.source === v ? 'checked' : ''} onchange="budReglage('source','${v}')"><span><strong style="color:var(--text-1);font-size:0.8rem">${l}</strong><div style="font-size:0.68rem;color:var(--text-4)">${sub}</div></span></label>`;
+  return impCard('Source des dépenses et revenus réels', radio('saisie', 'Saisie et programmés (recommandé)', 'Ce que vous saisissez, les programmés enregistrés automatiquement à leur date, les échéances des prêts et les dépenses du véhicule.')
+      + radio('banque', 'Relevés bancaires importés', 'Les opérations des comptes cochés ci-dessous (virements entre vos comptes exclus), classées par les mots-clés des catégories, plus vos saisies. Les programmés et prêts ne servent alors qu’au prévu.')
+      + (r.source === 'banque' ? `<div style="margin:6px 0 0 24px">${comptes.map(c => `<label style="display:block;font-size:0.75rem;color:var(--text-2);margin-bottom:4px"><input type="checkbox" ${(r.comptes.length ? r.comptes.includes(c.id) : c.courant || c.carte) ? 'checked' : ''} onchange="budToggleCompte('${impEsc(c.id)}', this.checked)"> ${impEsc(c.nom)} <span style="color:var(--text-4)">(${c.nb} opérations)</span></label>`).join('')}
+        <div style="font-size:0.64rem;color:var(--text-4)">Sans choix : comptes courants et cartes bancaires (le débit mensuel d’une carte à débit différé est ignoré : ses achats sont comptés un par un).</div></div>` : ''))
+    + impCard('Échéances des prêts', `<label style="font-size:0.78rem;color:var(--text-2)"><input type="checkbox" ${r.inclureEmprunts ? 'checked' : ''} onchange="budReglage('inclureEmprunts', this.checked)"> Compter automatiquement les échéances des prêts (page Emprunts) dans les dépenses</label>`);
+}
+
 function renderBudget() {
   const root = document.getElementById('budget-root');
   if (!root) return;
-
-  const B = DATA.budget;
-  const revenus  = B.revenus.reduce((s, r) => s + r.montant, 0);
-  const depTotal = B.depenses.reduce((s, d) => s + d.montant, 0);
-  const cashflow = revenus - depTotal;
-  const txEp     = revenus > 0 ? cashflow / revenus * 100 : 0;
-  const cfPos    = cashflow >= 0;
-  const cfCls    = cfPos ? 'amt-pos' : 'amt-neg';
-
-  const catMap = {};
-  B.categories.forEach(c => { catMap[c.id] = { ...c, depense: 0 }; });
-  B.depenses.forEach(d => { if (catMap[d.categorie_id]) catMap[d.categorie_id].depense += d.montant; });
-  const cats = Object.values(catMap).filter(c => c.depense > 0 || c.budget_mensuel > 0);
-
-  const donutData = cats.filter(c => c.depense > 0).map(c => ({ l: c.nom, v: c.depense, c: c.couleur }));
-  const donutSvg  = buildDonut(donutData, 80);
-
-  const catBars = cats.map(c => {
-    const pct = c.budget_mensuel > 0 ? Math.min(100, c.depense / c.budget_mensuel * 100) : 0;
-    const over = c.depense > c.budget_mensuel && c.budget_mensuel > 0;
-    return `
-    <div style="margin-bottom:1rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span>${c.icone} <strong>${c.nom}</strong></span>
-        <span style="font-size:.82rem">
-          <span style="color:${over?'#EF4444':'var(--text-1)'}">${fmt(c.depense)}</span>
-          <span style="color:var(--text-3)"> / ${fmt(c.budget_mensuel)}</span>
-          <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem;margin-left:6px" onclick="budgetEditCat('${c.id}')">o</button>
-        </span>
-      </div>
-      <div style="width:100%;background:rgba(255,255,255,.08);border-radius:6px;height:8px">
-        <div style="width:${pct.toFixed(1)}%;background:${over?'#EF4444':c.couleur};height:8px;border-radius:6px"></div>
-      </div>
-    </div>`;
-  }).join('');
-
-  const catOptions = B.categories.map(c => `<option value="${c.id}">${c.icone} ${c.nom}</option>`).join('');
-
-  const revRows = B.revenus.map(r => `
-    <tr>
-      <td>${r.source}</td>
-      <td style="text-align:right;color:var(--em-bright);font-weight:700">${fmt(r.montant)}</td>
-      <td><span style="font-size:.75rem;padding:2px 8px;border-radius:4px;background:rgba(16,185,129,.15);color:var(--em-bright)">${r.recurrence}</span></td>
-      <td style="text-align:right;white-space:nowrap">
-        <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budgetEditRevenu('${r.id}')">o</button>
-        <button class="btn btn-red"   style="padding:2px 7px;font-size:.68rem" onclick="budgetDelRevenu('${r.id}')">✕</button>
-      </td>
-    </tr>`).join('');
-
-  const depRows = [...B.depenses].sort((a,b) => b.date.localeCompare(a.date)).map(d => {
-    const cat = catMap[d.categorie_id] || {};
-    return `
-    <tr>
-      <td style="color:var(--text-3)">${d.date}</td>
-      <td>${d.desc}</td>
-      <td><span style="font-size:.75rem;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,.08)">${cat.icone||''} ${cat.nom||d.categorie_id}</span></td>
-      <td style="text-align:right;color:#EF4444">-${fmt(d.montant)}</td>
-      <td style="text-align:right;white-space:nowrap">
-        <button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="budgetEditDep('${d.id}')">o</button>
-        <button class="btn btn-red"   style="padding:2px 7px;font-size:.68rem" onclick="budgetDelDep('${d.id}')">✕</button>
-      </td>
-    </tr>`;
-  }).join('');
-
-  root.innerHTML = `
-  <div class="c3w"><div class="c3"><div class="shine"></div>
-    <div class="page-header">
-      <div class="page-icon">💸</div>
-      <div><div class="page-title">Budget</div><div class="page-subtitle">Revenus · Dépenses · Cashflow</div></div>
-    </div>
-
-    <div class="stats-row" style="margin-bottom:1.5rem">
-      <div class="stat-card"><div class="stat-val" style="color:var(--em-bright)">${fmt(revenus)}</div><div class="stat-lbl">Revenus du mois</div><div class="stat-trend">${B.revenus.length} source${B.revenus.length>1?'s':''}</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:#EF4444">${fmt(depTotal)}</div><div class="stat-lbl">Dépenses du mois</div><div class="stat-trend">${B.depenses.length} opération${B.depenses.length>1?'s':''}</div></div>
-      <div class="stat-card"><div class="stat-val ${cfCls}">${cfPos?'+':''}${fmt(cashflow)}</div><div class="stat-lbl">Cashflow</div><div class="stat-trend ${cfCls}">${txEp.toFixed(1)}\u202f% épargné</div></div>
-      <div class="stat-card"><div style="display:flex;justify-content:center">${donutSvg}</div><div class="stat-lbl" style="text-align:center;margin-top:.5rem">Répartition</div></div>
-    </div>
-
-    <div class="section-title">Suivi par catégorie</div>
-    <div id="bgt-cat-form-wrap"></div>
-    <div class="c3w" style="margin-bottom:1.5rem"><div class="c3" style="padding:1.2rem 1.4rem"><div class="shine"></div>${catBars}</div></div>
-
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-      <span>Sources de revenus</span>
-      <button class="btn btn-em" style="padding:4px 12px;font-size:.72rem" onclick="budgetShowRevForm()">➕ Ajouter</button>
-    </div>
-    <div id="bgt-rev-form-wrap" style="margin-bottom:.5rem"></div>
-    <div class="table-wrap" style="margin-bottom:1.5rem">
-      <table class="tx-table">
-        <thead><tr><th>Source</th><th style="text-align:right">Montant</th><th>Fréquence</th><th></th></tr></thead>
-        <tbody>${revRows}</tbody>
-      </table>
-    </div>
-
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-      <span>Détail des dépenses</span>
-      <button class="btn btn-em" style="padding:4px 12px;font-size:.72rem" onclick="budgetShowDepForm()">➕ Ajouter</button>
-    </div>
-    <div id="bgt-dep-form-wrap" style="margin-bottom:.5rem"></div>
-    <div class="table-wrap">
-      <table class="tx-table">
-        <thead><tr><th>Date</th><th>Description</th><th>Catégorie</th><th style="text-align:right">Montant</th><th></th></tr></thead>
-        <tbody>${depRows}</tbody>
-      </table>
-    </div>
-  </div></div>`;
-  root.querySelectorAll('.c3').forEach(attachTilt);
+  if (!BUDGET_UI.ym) BUDGET_UI.ym = todayISO().slice(0, 7);
+  const ym = BUDGET_UI.ym, tab = BUDGET_UI.tab;
+  const tabs = `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">${BUD_TABS.map(([id, l, ico]) => `<div onclick="budSetTab('${id}')" style="padding:8px 14px;border-radius:8px;cursor:pointer;font-size:0.78rem;font-weight:${tab === id ? 700 : 500};color:${tab === id ? 'var(--em-bright)' : 'var(--text-3)'};background:${tab === id ? 'rgba(16,185,129,0.12)' : 'transparent'};border:1px solid ${tab === id ? 'rgba(16,185,129,0.3)' : 'transparent'}">${ico} ${l}</div>`).join('')}</div>`;
+  const nav = tab === 'mois' || tab === 'categories' ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <button class="btn btn-ghost" style="padding:4px 10px" onclick="budSetMonth(-1)">◀</button>
+      <strong style="font-size:0.95rem;color:var(--text-1);min-width:150px;text-align:center;text-transform:capitalize">${impEsc(budMonthLabel(ym))}</strong>
+      <button class="btn btn-ghost" style="padding:4px 10px" onclick="budSetMonth(1)">▶</button>
+      ${ym !== todayISO().slice(0, 7) ? `<button class="btn btn-ghost" style="padding:4px 10px;font-size:0.72rem" onclick="budSetMonth(0)">Aujourd’hui</button>` : ''}</div>` : '';
+  const content = tab === 'mois' ? budTabMois(ym) : tab === 'releves' ? budTabReleves() : tab === 'prevision' ? budTabPrevision() : tab === 'programmes' ? budTabProgrammes() : tab === 'categories' ? budTabCategories() : budTabReglages();
+  root.innerHTML = budForm() + impCard('💸 Budget', tabs + nav + content);
 }
 
-// ─── Budget CRUD helpers ───
-function budgetShowRevForm(id) {
-  const r = id ? DATA.budget.revenus.find(x => x.id === id) : null;
-  const wrap = document.getElementById('bgt-rev-form-wrap');
-  if (!wrap) return;
-  wrap.innerHTML = `<div class="c3w" style="margin-bottom:.5rem"><div class="c3" style="padding:1rem 1.2rem"><div class="shine"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end">
-      <div><label style="font-size:.7rem;color:var(--text-3)">Source</label>
-        <input id="brev-src" class="inp" value="${r?r.source:''}" placeholder="Ex : Salaire net"></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Montant (€)</label>
-        <input id="brev-amt" class="inp" type="number" step="0.01" value="${r?r.montant:''}" placeholder="3240"></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Récurrence</label>
-        <select id="brev-rec" class="inp">
-          ${['mensuel','annuel','variable'].map(v=>`<option value="${v}"${r&&r.recurrence===v?' selected':''}>${v}</option>`).join('')}
-        </select></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-em" onclick="budgetSaveRevenu('${id||''}')">✓ Enregistrer</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('bgt-rev-form-wrap').innerHTML=''">✕</button>
-      </div>
-    </div>
-  </div></div>`;
+// ── Budget › Relevés & abonnements : classement automatique des opérations bancaires importées
+// (comptes courants et cartes), abonnements détectés, correction d'une catégorie (mémorisée en
+// mot-clé de la catégorie). Calculs : EmeraudeCore.analyserReleve / detecterAbonnements (testés).
+const BUD_REL = { periode: '12m', cat: '', cache: null };
+function budRelComptes() {
+  const r = budB().reglages || {}, sel = new Set(r.comptes || []), out = [];
+  (DATA.banks || []).forEach(b => (b.accounts || []).forEach(a => {
+    if (sel.size ? sel.has(a.id) : (/courant/i.test(a.type || '') || EmeraudeCore.estCarte(a))) out.push({ a, nom: `${b.name} › ${a.nom}` });
+  }));
+  return out;
 }
-function budgetEditRevenu(id) { budgetShowRevForm(id); }
-function budgetSaveRevenu(id) {
-  const src = document.getElementById('brev-src').value.trim();
-  const amt = parseFloat(document.getElementById('brev-amt').value);
-  const rec = document.getElementById('brev-rec').value;
-  if (!src || isNaN(amt)) return;
-  if (id) {
-    const r = DATA.budget.revenus.find(x => x.id === id);
-    if (r) { r.source = src; r.montant = amt; r.recurrence = rec; }
+function budRelAnalyse(opts) {
+  const today = todayISO(), comptes = budRelComptes();
+  const txns = comptes.flatMap(({ a, nom }) => (a.txns || []).map(t => Object.assign({}, t, { _compte: nom })));
+  const from = opts && opts.from ? opts.from : BUD_REL.periode === '12m' ? new Date(Date.parse(today) - 365 * 86400000).toISOString().slice(0, 10)
+    : BUD_REL.periode === 'annee' ? today.slice(0, 4) + '-01-01' : '0000-00-00';
+  return { comptes, an: EmeraudeCore.analyserReleve(txns, budB().categories || [], today, { from, recurrences: budB().recurrences }) };
+}
+function budRelSet(k, v) { BUD_REL[k] = v; BUDGET_UI.toast = ''; renderBudget(); }
+// Correction : le début du libellé devient un mot-clé de la catégorie choisie (et quitte les autres)
+function budRelClasser(libelle, catId) {
+  const kw = EmeraudeCore.normText(libelle).replace(/\d+/g, ' ').split(' ').filter(w => w.length > 1).slice(0, 3).join(' ');
+  if (!kw) return;
+  (budB().categories || []).forEach(c => { c.motsCles = (c.motsCles || []).filter(k => EmeraudeCore.normText(k) !== kw); });
+  const c = budCat(catId); if (!c || !budB().categories.includes(c)) return;
+  c.motsCles.push(kw);
+  BUDGET_UI.toast = `« ${kw} » → ${c.nom} : appliqué à toutes les opérations de ce libellé.`;
+  budSave();
+}
+function budRelProgrammer(i) {
+  const x = (BUD_REL.cache || [])[i]; if (!x) return;
+  const B = budB(); B.recurrences = B.recurrences || [];
+  B.recurrences.push({ id: budId('rec'), type: 'depense', libelle: x.libelle, montant: x.montant, categorie_id: x.categorie_id, frequence: x.frequence,
+    dateDebut: x.premiere, dateFin: '', actif: true, exceptions: {}, notes: `Détecté dans les relevés (${x.nb} paiement${x.nb > 1 ? 's' : ''})` });
+  BUDGET_UI.toast = `« ${x.libelle} » programmé : ${impMoney(x.montant)} ${EmeraudeCore.FREQUENCES[x.frequence].label.toLowerCase()}.`;
+  budSave();
+}
+function budRelAbosTable(abos, avecActions) {
+  if (!abos.length) return '<div style="font-size:0.75rem;color:var(--text-4)">Aucun paiement régulier détecté sur la période.</div>';
+  BUD_REL.cache = abos;
+  return impTable(['Service', 'Montant', 'Fréquence', '≈ par mois', 'Paiements', 'Dernier', 'Prochain', avecActions ? '' : 'Statut'], abos.map((x, i) => `<tr style="${x.actif ? '' : 'opacity:0.5'}">
+    <td><strong>${impEsc(x.libelle)}</strong>${x.connu ? '' : ' <span style="font-size:0.6rem;color:var(--text-4)">(régulier)</span>'}${x.confiance === 'faible' ? ' <span style="font-size:0.6rem;color:var(--gold-base)">à confirmer</span>' : ''}</td>
+    <td style="text-align:right;white-space:nowrap">${impMoney(x.montant)}${Math.abs(x.montant - x.montantMoyen) > 0.05 ? `<div style="font-size:0.6rem;color:var(--text-4)">moy. ${impMoney(x.montantMoyen)}</div>` : ''}</td>
+    <td style="white-space:nowrap">${impEsc(EmeraudeCore.FREQUENCES[x.frequence].label)}</td><td style="text-align:right;white-space:nowrap">${impMoney(x.parMois)}</td>
+    <td style="text-align:right">${x.nb}</td><td style="white-space:nowrap">${EmeraudeCore.isoToFr(x.derniere)}</td>
+    <td style="white-space:nowrap">${x.actif ? EmeraudeCore.isoToFr(x.prochaine) : '<span style="color:var(--text-4)">arrêté ?</span>'}</td>
+    <td style="text-align:right;white-space:nowrap">${!avecActions ? (x.actif ? 'actif' : 'arrêté') : x.dejaProgramme ? '<span class="amt-pos" style="font-size:0.7rem">✓ programmé</span>'
+      : x.actif ? `<button class="btn btn-ghost" style="padding:2px 8px;font-size:.68rem" onclick="budRelProgrammer(${i})" title="Ajouter aux dépenses programmées du budget">🔁 Programmer</button>` : ''}</td></tr>`));
+}
+function budTabReleves() {
+  const { comptes, an } = budRelAnalyse();
+  if (!comptes.some(c => (c.a.txns || []).length)) return `<div style="font-size:0.8rem;color:var(--text-3);line-height:1.7">Aucune opération bancaire importée sur les comptes choisis.<br>
+    Importez un relevé (menu <strong>Imports</strong> : OFX conseillé, ou CSV) de votre compte courant ou de votre carte : les opérations seront classées par catégorie et les abonnements détectés ici.</div>`;
+  const dep = an.parCategorie.filter(c => c.type === 'depense'), rev = an.parCategorie.filter(c => c.type === 'revenu');
+  const maxD = Math.max(1, ...dep.map(c => c.total));
+  const actifs = an.abonnements.filter(x => x.actif), aboMois = actifs.reduce((s, x) => s + x.parMois, 0);
+  const per = [['12m', '12 derniers mois'], ['annee', 'Cette année'], ['tout', 'Tout']].map(([v, l]) => `<option value="${v}" ${BUD_REL.periode === v ? 'selected' : ''}>${l}</option>`).join('');
+  const catBars = dep.map(c => { const k = budCat(c.categorie_id); return `<div style="margin-bottom:8px;cursor:pointer" onclick="budRelSet('cat', BUD_REL.cat === '${c.categorie_id}' ? '' : '${c.categorie_id}')" title="Afficher les opérations de cette catégorie">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:0.76rem;color:${BUD_REL.cat === c.categorie_id ? 'var(--em-bright)' : 'var(--text-2)'}"><span>${impEsc(k.icone || '')} ${impEsc(k.nom)} <span style="color:var(--text-4)">(${c.nb})</span></span>
+      <span><strong>${impMoney(c.total)}</strong> <span style="color:var(--text-4)">· ${impMoney(c.total / an.mois)}/mois · ${Math.round(c.total / Math.max(1, an.depenses) * 100)} %</span></span></div>
+      <div class="immo-bar" style="height:8px"><div class="immo-seg" style="width:${(c.total / maxD * 100).toFixed(1)}%;background:${impEsc(k.couleur || '#10B981')}"></div></div></div>`; }).join('');
+  const lignes = an.lignes.filter(l => !BUD_REL.cat || l.categorie_id === BUD_REL.cat);
+  const opts = type => budCats(type).map(c => `<option value="${c.id}">${impEsc(c.icone || '')} ${impEsc(c.nom)}</option>`).join('');
+  const optD = opts('depense'), optR = opts('revenu');
+  const rows = lignes.slice(0, 300).map(l => `<tr><td style="white-space:nowrap">${EmeraudeCore.isoToFr(l.date)}</td><td>${impEsc(l.libelle)}<div style="font-size:0.6rem;color:var(--text-4)">${impEsc(l.compte)}</div></td>
+    <td><select class="form-select" style="padding:2px 6px;font-size:0.7rem;min-width:150px;${l.origine === 'défaut' ? 'border-color:rgba(234,179,8,0.5)' : ''}" onchange="budRelClasser(${impEsc(JSON.stringify(l.libelle))}, this.value)">${(l.type === 'revenu' ? optR : optD).replace(`value="${l.categorie_id}"`, `value="${l.categorie_id}" selected`)}</select></td>
+    <td style="text-align:right">${budMoney(l.montant, l.type)}</td></tr>`);
+  return (BUDGET_UI.toast ? `<div style="padding:8px 12px;border-radius:8px;margin-bottom:12px;font-size:0.75rem;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--em-bright)">${impEsc(BUDGET_UI.toast)}</div>` : '')
+    + `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><select class="form-select" style="width:auto" onchange="budRelSet('periode', this.value)">${per}</select>
+      <span style="font-size:0.68rem;color:var(--text-4)">${impEsc(comptes.map(c => c.nom).join(' · '))} — du ${EmeraudeCore.isoToFr(an.debut)} au ${EmeraudeCore.isoToFr(an.fin)} (comptes : onglet Réglages)</span></div>
+    <div class="immo-kpis" style="margin-bottom:14px">
+      ${budTile('Dépenses', impMoney(an.depenses), impMoney(an.depenses / an.mois) + ' par mois', 'amt-neg')}
+      ${budTile('Rentrées d’argent', impMoney(an.revenus), impMoney(an.revenus / an.mois) + ' par mois', 'amt-pos')}
+      ${budTile('Abonnements actifs', impMoney(aboMois) + '/mois', `${actifs.length} détecté(s) · ${impMoney(aboMois * 12)}/an`)}
+      ${budTile('Opérations', String(an.lignes.length), an.nonClasses ? `${an.nonClasses} dans « Autre » : à classer ci-dessous` : 'toutes classées')}
+    </div>`
+    + impCard(`🔁 Abonnements et paiements réguliers détectés (${an.abonnements.length})`, budRelAbosTable(an.abonnements, true)
+      + `<div style="font-size:0.66rem;color:var(--text-4);margin-top:8px">Services connus (Netflix, Disney+, Amazon, Microsoft, Google, Apple, Spotify…) ou même commerçant payé à intervalle régulier pour un montant proche. « Programmer » l’ajoute aux dépenses programmées (prévisions du budget).</div>`)
+    + `<div class="immo-grid" style="margin-top:0;margin-bottom:14px">
+        <div class="immo-sec"><div class="immo-sec-t">Dépenses par catégorie${BUD_REL.cat ? ' · <a style="cursor:pointer;color:var(--em-bright)" onclick="budRelSet(\'cat\', \'\')">tout afficher</a>' : ''}</div>${catBars || '<div style="font-size:0.72rem;color:var(--text-4)">Aucune dépense.</div>'}</div>
+        <div class="immo-sec"><div class="immo-sec-t">Principaux commerçants</div>${an.marchands.slice(0, 12).map(m => immoRow(impEsc(m.marchand) + ` <span style="color:var(--text-4)">×${m.nb}</span>`, impMoney(m.total))).join('')}
+          <div class="immo-sec-t" style="margin-top:12px">Rentrées d’argent</div>${rev.map(c => immoRow(impEsc((budCat(c.categorie_id).icone || '') + ' ' + budCat(c.categorie_id).nom), impMoney(c.total), 'amt-pos')).join('') || '<div style="font-size:0.72rem;color:var(--text-4)">Aucune.</div>'}</div></div>`
+    + impCard(`Opérations${BUD_REL.cat ? ' · ' + impEsc(budCat(BUD_REL.cat).nom) : ''} (${lignes.length})`, `<div style="font-size:0.66rem;color:var(--text-4);margin-bottom:8px">Changer la catégorie d’une ligne l’applique à toutes les opérations du même libellé (mot-clé ajouté à la catégorie). Cadre jaune : classée « Autre » faute de règle.</div>`
+      + impTable(['Date', 'Libellé', 'Catégorie', 'Montant'], rows) + (lignes.length > 300 ? `<div style="font-size:0.66rem;color:var(--text-4);margin-top:6px">300 premières lignes affichées.</div>` : ''));
+}
+
+// Imports : analyse du relevé bancaire qui vient d'être importé
+function impAnalyseCard() {
+  const x = IMP.analyse; if (!x) return '';
+  let acc = null, nom = '';
+  (DATA.banks || []).forEach(b => (b.accounts || []).forEach(a => { if (a.id === x.accountId) { acc = a; nom = `${b.name} › ${a.nom}`; } }));
+  const txns = acc ? (acc.txns || []).filter(t => t.importId === x.importId) : [];
+  if (!txns.length) return '';
+  const an = EmeraudeCore.analyserReleve(txns, (DATA.budget || {}).categories || [], todayISO(), { recurrences: (DATA.budget || {}).recurrences });
+  const dep = an.parCategorie.filter(c => c.type === 'depense'), maxD = Math.max(1, ...dep.map(c => c.total));
+  const actifs = an.abonnements.filter(a => a.actif);
+  return impCard(`🧾 Analyse du relevé « ${impEsc(x.fichier)} »`, `<div style="font-size:0.72rem;color:var(--text-3);margin-bottom:10px">${impEsc(nom)} · ${an.lignes.length} opérations du ${EmeraudeCore.isoToFr(an.debut)} au ${EmeraudeCore.isoToFr(an.fin)} ·
+      dépenses <strong class="amt-neg">${impMoney(an.depenses)}</strong>${an.revenus ? ` · rentrées <strong class="amt-pos">${impMoney(an.revenus)}</strong>` : ''}${an.nonClasses ? ` · ${an.nonClasses} non classée(s)` : ''}</div>
+    <div class="immo-grid" style="margin-top:0">
+      <div class="immo-sec"><div class="immo-sec-t">Par catégorie</div>${dep.slice(0, 10).map(c => { const k = budCat(c.categorie_id); return `<div style="margin-bottom:6px"><div style="display:flex;justify-content:space-between;font-size:0.74rem;color:var(--text-2)"><span>${impEsc(k.icone || '')} ${impEsc(k.nom)}</span><strong>${impMoney(c.total)}</strong></div>
+        <div class="immo-bar" style="height:6px"><div class="immo-seg" style="width:${(c.total / maxD * 100).toFixed(1)}%;background:${impEsc(k.couleur || '#10B981')}"></div></div></div>`; }).join('')}</div>
+      <div class="immo-sec"><div class="immo-sec-t">Abonnements détectés (${actifs.length} actifs · ${impMoney(actifs.reduce((s, a) => s + a.parMois, 0))}/mois)</div>
+        ${an.abonnements.map(a => immoRow(`${impEsc(a.libelle)}${a.actif ? '' : ' <span style="color:var(--text-4)">(arrêté ?)</span>'}`, `${impMoney(a.montant)} · ${impEsc(EmeraudeCore.FREQUENCES[a.frequence].label.toLowerCase())}`)).join('') || '<div style="font-size:0.72rem;color:var(--text-4)">Aucun.</div>'}</div></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-em" onclick="IMP.analyse = null; BUDGET_UI.tab = 'releves'; document.querySelector('.nav-item[data-page=&quot;budget&quot;]').click()">Voir dans Budget › Relevés & abonnements</button>
+      <button class="btn btn-ghost" onclick="IMP.analyse = null; renderImports()">Fermer</button></div>`);
+}
+
+// ......................................
+// VÉHICULE
+// ......................................
+// Fiche, dépenses (carte grise, assurance, entretien, contrôle technique…), pleins et consommation.
+// Calculs : EmeraudeCore.vehiculeStats (testé). Les dépenses et pleins comptent dans le Budget (catégories Véhicule / Carburant).
+const VEH_UI = { id: null, form: null };
+const vehList = () => (DATA.vehicules = DATA.vehicules || []);
+const vehCur = () => vehList().find(v => v.id === VEH_UI.id) || vehList()[0] || null;
+function vehSave() { saveData(); render(); renderVehicule(); }
+function vehNew(kind) {
+  const today = todayISO(), v = vehCur();
+  if (kind === 'vehicule') VEH_UI.form = { kind, d: { id: null, nom: 'Mon véhicule', marque: '', modele: '', immatriculation: '', energie: 'Diesel', dateAchat: today, dateMiseEnCirculation: today, prixAchat: 0, kmAchat: 0, reservoir: 0, entretienKm: 20000, entretienMois: 12, depenses: [], pleins: [] } };
+  else if (kind === 'plein') { const s = v ? EmeraudeCore.vehiculeStats(v, today) : {}; VEH_UI.form = { kind, d: { id: null, date: today, km: s.kmActuel || '', litres: '', prixLitre: '', montant: '', complet: true, station: '' } }; }
+  else VEH_UI.form = { kind, d: { id: null, date: today, type: 'entretien', libelle: '', montant: '', km: '' } };
+  renderVehicule();
+  document.getElementById('vehicule-root')?.scrollIntoView({ behavior: 'smooth' });
+}
+function vehEdit(kind, id) {
+  const v = vehCur(); if (!v) return;
+  const x = kind === 'vehicule' ? v : (kind === 'plein' ? v.pleins : v.depenses).find(o => o.id === id);
+  if (!x) return;
+  const d = JSON.parse(JSON.stringify(x));
+  if (kind === 'vehicule') { delete d.depenses; delete d.pleins; }
+  VEH_UI.form = { kind, d };
+  renderVehicule();
+  document.getElementById('vehicule-root')?.scrollIntoView({ behavior: 'smooth' });
+}
+function vehSet(field, v, num) { VEH_UI.form.d[field] = num ? (v === '' ? '' : parseFloat(String(v).replace(',', '.'))) : v; if (VEH_UI.form.kind === 'plein' && ['litres', 'prixLitre', 'montant'].includes(field)) vehPleinCalc(field); }
+// Plein : deux des trois valeurs (litres, prix au litre, montant) suffisent, la troisième est calculée
+function vehPleinCalc(changed) {
+  const d = VEH_UI.form.d, L = +d.litres, P = +d.prixLitre, M = +d.montant;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  if (changed !== 'montant' && L > 0 && P > 0) { d.montant = Math.round(L * P * 100) / 100; set('veh-montant', d.montant); }
+  else if (changed === 'montant' && L > 0 && M > 0) { d.prixLitre = Math.round(M / L * 1000) / 1000; set('veh-prix', d.prixLitre); }
+  else if (M > 0 && P > 0 && !(L > 0)) { d.litres = Math.round(M / P * 100) / 100; set('veh-litres', d.litres); }
+}
+function vehCancel() { VEH_UI.form = null; renderVehicule(); }
+function vehSubmit() {
+  const f = VEH_UI.form, d = f.d;
+  if (f.kind === 'vehicule') {
+    if (!String(d.nom).trim()) { alert('Nom du véhicule obligatoire.'); return; }
+    if (d.id) { const v = vehList().find(x => x.id === d.id); Object.assign(v, d); }
+    else { d.id = budId('veh'); vehList().push(d); VEH_UI.id = d.id; }
   } else {
-    DATA.budget.revenus.push({ id:'rev-'+Date.now(), source:src, montant:amt, recurrence:rec });
+    const v = vehCur(); if (!v) return;
+    if (!EmeraudeCore.toISO(d.date)) { alert('Date obligatoire.'); return; }
+    if (f.kind === 'plein') {
+      if (!(+d.litres > 0)) { alert('Volume en litres obligatoire.'); return; }
+      if (!(+d.montant > 0) && !(+d.prixLitre > 0)) { alert('Indiquez le prix au litre ou le montant payé.'); return; }
+      if (d.km !== '' && +d.km > 0) {
+        const prec = (v.pleins || []).filter(p => p.id !== d.id && +p.km > 0 && p.date <= d.date).sort((a, b) => b.date.localeCompare(a.date))[0];
+        if (prec && +d.km < +prec.km && !confirm(`Kilométrage (${d.km} km) inférieur au plein précédent (${prec.km} km le ${EmeraudeCore.isoToFr(prec.date)}). Enregistrer quand même ?`)) return;
+      }
+      d.montant = +d.montant > 0 ? +d.montant : Math.round(+d.litres * +d.prixLitre * 100) / 100;
+      v.pleins = v.pleins || [];
+    } else {
+      if (!(+d.montant > 0)) { alert('Montant obligatoire.'); return; }
+      v.depenses = v.depenses || [];
+    }
+    const list = f.kind === 'plein' ? v.pleins : v.depenses;
+    if (d.id) { const i = list.findIndex(x => x.id === d.id); if (i >= 0) list[i] = d; } else { d.id = budId(f.kind === 'plein' ? 'plein' : 'vdep'); list.push(d); }
   }
-  saveData(); renderBudget();
+  VEH_UI.form = null;
+  vehSave();
 }
-function budgetDelRevenu(id) {
-  DATA.budget.revenus = DATA.budget.revenus.filter(r => r.id !== id);
-  saveData(); renderBudget();
-}
-function budgetShowDepForm(id) {
-  const d = id ? DATA.budget.depenses.find(x => x.id === id) : null;
-  const catOptions = DATA.budget.categories.map(c => `<option value="${c.id}"${d&&d.categorie_id===c.id?' selected':''}>${c.icone} ${c.nom}</option>`).join('');
-  const wrap = document.getElementById('bgt-dep-form-wrap');
-  if (!wrap) return;
-  wrap.innerHTML = `<div class="c3w" style="margin-bottom:.5rem"><div class="c3" style="padding:1rem 1.2rem"><div class="shine"></div>
-    <div style="display:grid;grid-template-columns:1fr 2fr 1fr 1fr auto;gap:8px;align-items:end">
-      <div><label style="font-size:.7rem;color:var(--text-3)">Date</label>
-        <input id="bdep-date" class="inp" type="date" value="${d?d.date:new Date().toISOString().slice(0,10)}"></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Description</label>
-        <input id="bdep-desc" class="inp" value="${d?d.desc:''}" placeholder="Ex : EDF"></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Catégorie</label>
-        <select id="bdep-cat" class="inp">${catOptions}</select></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Montant (€)</label>
-        <input id="bdep-amt" class="inp" type="number" step="0.01" value="${d?d.montant:''}" placeholder="89.50"></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-em" onclick="budgetSaveDep('${id||''}')">o"</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('bgt-dep-form-wrap').innerHTML=''">✕</button>
-      </div>
-    </div>
-  </div></div>`;
-}
-function budgetEditDep(id) { budgetShowDepForm(id); }
-function budgetSaveDep(id) {
-  const date = document.getElementById('bdep-date').value;
-  const desc = document.getElementById('bdep-desc').value.trim();
-  const cat  = document.getElementById('bdep-cat').value;
-  const amt  = parseFloat(document.getElementById('bdep-amt').value);
-  if (!desc || isNaN(amt)) return;
-  if (id) {
-    const d = DATA.budget.depenses.find(x => x.id === id);
-    if (d) { d.date = date; d.desc = desc; d.categorie_id = cat; d.montant = amt; }
+function vehDelete(kind, id) {
+  if (kind === 'vehicule') {
+    const v = vehCur(); if (!v || !confirm(`Supprimer « ${v.nom} » avec toutes ses dépenses et ses pleins ?`)) return;
+    DATA.vehicules = vehList().filter(x => x.id !== v.id); VEH_UI.id = null;
   } else {
-    DATA.budget.depenses.push({ id:'dep-'+Date.now(), date, desc, categorie_id:cat, montant:amt });
+    const v = vehCur(); if (!v || !confirm('Supprimer cette ligne ?')) return;
+    if (kind === 'plein') v.pleins = v.pleins.filter(x => x.id !== id); else v.depenses = v.depenses.filter(x => x.id !== id);
   }
-  saveData(); renderBudget();
+  vehSave();
 }
-function budgetDelDep(id) {
-  DATA.budget.depenses = DATA.budget.depenses.filter(d => d.id !== id);
-  saveData(); renderBudget();
+function vehSelect(id) { VEH_UI.id = id; VEH_UI.form = null; renderVehicule(); }
+
+function vehForm() {
+  const f = VEH_UI.form; if (!f) return '';
+  const d = f.d;
+  const inp = (field, label, type, extra) => impField(label, `<input class="form-input" type="${type || 'text'}" ${extra || ''} value="${impEsc(d[field] ?? '')}" onchange="vehSet('${field}', this.value, ${type === 'number'})">`);
+  let title, body;
+  if (f.kind === 'vehicule') {
+    title = d.id ? `Modifier « ${impEsc(d.nom)} »` : 'Nouveau véhicule';
+    body = `<div class="form-grid">${inp('nom', 'Nom')}${inp('marque', 'Marque')}${inp('modele', 'Modèle')}${inp('immatriculation', 'Immatriculation')}
+      ${impField('Énergie', `<select class="form-select" onchange="vehSet('energie', this.value)">${['Diesel', 'Essence', 'Hybride', 'Électrique', 'GPL'].map(e => `<option ${e === d.energie ? 'selected' : ''}>${e}</option>`).join('')}</select>`)}
+      ${inp('dateMiseEnCirculation', 'Date de 1re mise en circulation', 'date')}${inp('dateAchat', 'Date d’achat', 'date')}${inp('prixAchat', 'Prix d’achat (€)', 'number', 'step="0.01" min="0"')}
+      ${inp('kmAchat', 'Kilométrage à l’achat', 'number', 'step="1" min="0"')}${inp('reservoir', 'Réservoir (L, facultatif)', 'number', 'step="1" min="0"')}
+      ${inp('entretienKm', 'Entretien tous les … km', 'number', 'step="1000" min="0"')}${inp('entretienMois', 'ou tous les … mois', 'number', 'step="1" min="0"')}</div>
+      <div style="font-size:0.66rem;color:var(--text-4)">Contrôle technique rappelé 4 ans après la 1re mise en circulation, puis tous les 2 ans après le dernier contrôle enregistré.</div>`;
+  } else if (f.kind === 'plein') {
+    title = d.id ? 'Modifier le plein' : 'Nouveau plein';
+    body = `<div class="form-grid">${inp('date', 'Date', 'date')}${impField('Compteur (km)', `<input class="form-input" type="number" step="1" min="0" value="${impEsc(d.km ?? '')}" onchange="vehSet('km', this.value, true)">`)}
+      ${impField('Volume (L)', `<input id="veh-litres" class="form-input" type="number" step="0.01" min="0" value="${impEsc(d.litres ?? '')}" oninput="vehSet('litres', this.value, true)">`)}
+      ${impField('Prix au litre (€)', `<input id="veh-prix" class="form-input" type="number" step="0.001" min="0" value="${impEsc(d.prixLitre ?? '')}" oninput="vehSet('prixLitre', this.value, true)">`)}
+      ${impField('Montant payé (€)', `<input id="veh-montant" class="form-input" type="number" step="0.01" min="0" value="${impEsc(d.montant ?? '')}" oninput="vehSet('montant', this.value, true)">`)}
+      ${inp('station', 'Station (facultatif)')}</div>
+      <label style="font-size:0.78rem;color:var(--text-2)"><input type="checkbox" ${d.complet !== false ? 'checked' : ''} onchange="vehSet('complet', this.checked)"> Plein complet (réservoir rempli) — nécessaire au calcul de la consommation</label>
+      <div style="font-size:0.66rem;color:var(--text-4);margin-top:4px">Deux des trois valeurs (volume, prix au litre, montant) suffisent : la troisième est calculée.</div>`;
+  } else {
+    title = d.id ? 'Modifier la dépense' : 'Nouvelle dépense';
+    body = `<div class="form-grid">${inp('date', 'Date', 'date')}${impField('Type', `<select class="form-select" onchange="vehSet('type', this.value)">${Object.entries(EmeraudeCore.VEHICULE_TYPES).map(([k, l]) => `<option value="${k}" ${d.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+      ${inp('libelle', 'Détail', 'text', 'placeholder="Ex : vidange + filtres"')}${inp('montant', 'Montant (€)', 'number', 'step="0.01" min="0"')}${inp('km', 'Compteur (km, facultatif)', 'number', 'step="1" min="0"')}</div>`;
+  }
+  return impCard(title, body + `<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-em" onclick="vehSubmit()">✓ Enregistrer</button><button class="btn btn-ghost" onclick="vehCancel()">Annuler</button></div>`);
 }
-function budgetEditCat(id) {
-  const c = DATA.budget.categories.find(x => x.id === id);
-  if (!c) return;
-  const wrap = document.getElementById('bgt-cat-form-wrap');
-  if (!wrap) return;
-  wrap.innerHTML = `<div class="c3w" style="margin-bottom:.5rem"><div class="c3" style="padding:1rem 1.2rem"><div class="shine"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
-      <div><label style="font-size:.7rem;color:var(--text-3)">Catégorie</label>
-        <input class="inp" value="${c.icone} ${c.nom}" disabled></div>
-      <div><label style="font-size:.7rem;color:var(--text-3)">Budget mensuel (€)</label>
-        <input id="bcat-bgt" class="inp" type="number" step="1" value="${c.budget_mensuel}"></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-em" onclick="budgetSaveCat('${id}')">✓ Enregistrer</button>
-        <button class="btn btn-ghost" onclick="document.getElementById('bgt-cat-form-wrap').innerHTML=''">✕</button>
-      </div>
-    </div>
-  </div></div>`;
+
+function vehConsoChart(consos) {
+  if (consos.length < 2) return '';
+  const W = 600, H = 120, pad = 20, vals = consos.map(c => c.conso), min = Math.min(...vals) * 0.9, max = Math.max(...vals) * 1.1;
+  const pts = consos.map((c, i) => `${(pad + i / (consos.length - 1) * (W - pad * 2)).toFixed(1)},${(H - pad - (c.conso - min) / (max - min || 1) * (H - pad * 2)).toFixed(1)}`);
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:140px"><polyline points="${pts.join(' ')}" fill="none" stroke="#F97316" stroke-width="2"/>
+    ${pts.map((p, i) => `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="3" fill="#F97316"><title>${EmeraudeCore.isoToFr(consos[i].date)} · ${String(consos[i].conso).replace('.', ',')} L/100 km</title></circle>`).join('')}</svg>`;
 }
-function budgetSaveCat(id) {
-  const c = DATA.budget.categories.find(x => x.id === id);
-  const v = parseFloat(document.getElementById('bcat-bgt').value);
-  if (c && !isNaN(v)) { c.budget_mensuel = v; saveData(); renderBudget(); }
+
+function renderVehicule() {
+  const root = document.getElementById('vehicule-root');
+  if (!root) return;
+  const list = vehList(), v = vehCur(), today = todayISO();
+  if (!v) {
+    root.innerHTML = vehForm() + impCard('🚗 Véhicule', `<div style="font-size:0.8rem;color:var(--text-3);margin-bottom:12px">Suivez les dépenses de votre véhicule (carte grise, assurance, entretien, contrôle technique…) et chaque plein, avec la consommation réelle.</div>
+      <button class="btn btn-em" onclick="vehNew('vehicule')">➕ Ajouter mon véhicule</button>`);
+    return;
+  }
+  VEH_UI.id = v.id;
+  const s = EmeraudeCore.vehiculeStats(v, today), an = today.slice(0, 4), mois = today.slice(0, 7);
+  const annee = Object.entries(s.parMois).filter(([k]) => k.startsWith(an)).reduce((t, [, x]) => t + x, 0);
+  const num = (n, d = 2) => n == null ? '—' : Number(n).toLocaleString('fr-FR', { maximumFractionDigits: d });
+  const prix = n => Number(n).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 3 }) + ' €';
+  const sel = list.length > 1 ? `<select class="form-select" style="width:auto;display:inline-block" onchange="vehSelect(this.value)">${list.map(x => `<option value="${impEsc(x.id)}" ${x.id === v.id ? 'selected' : ''}>${impEsc(x.nom)}</option>`).join('')}</select>` : '';
+  const head = `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+      <div><div style="font-size:1.05rem;font-weight:700;color:var(--text-1)">🚗 ${impEsc(v.nom)} ${sel}</div>
+        <div style="font-size:0.7rem;color:var(--text-4)">${impEsc([v.marque, v.modele, v.immatriculation, v.energie, v.dateAchat ? 'acheté le ' + EmeraudeCore.isoToFr(v.dateAchat) : ''].filter(Boolean).join(' · '))}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-em" onclick="vehNew('plein')">⛽ Plein</button><button class="btn btn-em" onclick="vehNew('depense')">➕ Dépense</button>
+        <button class="btn btn-ghost" onclick="vehEdit('vehicule')">✎ Fiche</button><button class="btn btn-ghost" onclick="vehNew('vehicule')">➕ Autre véhicule</button></div></div>`;
+  const rappels = [];
+  if (s.prochainCT) rappels.push(`<div style="color:${s.ctEnRetard ? '#FCA5A5' : 'var(--text-2)'}">🔧 Contrôle technique : ${s.ctEnRetard ? '<strong>en retard</strong> — ' : ''}avant le ${EmeraudeCore.isoToFr(s.prochainCT)}</div>`);
+  if (s.prochainEntretien.km || s.prochainEntretien.date) rappels.push(`<div style="color:${s.entretienAFaire ? '#FCD34D' : 'var(--text-2)'}">🛠 Entretien : ${s.entretienAFaire ? '<strong>à faire</strong> — ' : ''}${[s.prochainEntretien.km ? 'à ' + num(s.prochainEntretien.km, 0) + ' km' : '', s.prochainEntretien.date ? 'avant le ' + EmeraudeCore.isoToFr(s.prochainEntretien.date) : ''].filter(Boolean).join(' ou ')}</div>`);
+  const kpis = `<div class="immo-kpis" style="margin-bottom:14px">
+    ${budTile('Compteur', num(s.kmActuel, 0) + ' km', `${num(s.kmParcourus, 0)} km parcourus`)}
+    ${budTile('Consommation moyenne', s.consoMoyenne != null ? num(s.consoMoyenne) + ' L/100' : '—', s.derniereConso != null ? `dernier plein : ${num(s.derniereConso)} L/100` : 'deux pleins complets nécessaires')}
+    ${budTile('Prix moyen du litre', s.prixMoyenLitre != null ? prix(s.prixMoyenLitre) : '—', `${num(s.litresTotal)} L achetés`)}
+    ${budTile('Carburant aux 100 km', s.coutCarburant100 != null ? impMoney(s.coutCarburant100) : '—', `carburant total ${impMoney(s.carburant)}`)}
+    ${budTile('Coût d’usage', impMoney(s.coutUsage), s.coutParKm != null ? num(s.coutParKm, 3) + ' €/km (hors achat)' : 'hors prix d’achat')}
+    ${budTile('Dépenses ' + an, impMoney(annee), `ce mois-ci : ${impMoney(s.parMois[mois] || 0)}`)}
+  </div>`;
+  const types = Object.entries(s.parType).filter(([, x]) => x > 0).sort((a, b) => b[1] - a[1]);
+  const maxT = Math.max(1, ...types.map(t => t[1]));
+  const parType = types.map(([k, x]) => `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:0.76rem;color:var(--text-2)"><span>${impEsc(k === 'carburant' ? 'Carburant' : EmeraudeCore.VEHICULE_TYPES[k] || k)}</span><strong>${impMoney(x)}</strong></div>
+    <div class="immo-bar" style="height:8px"><div class="immo-seg" style="width:${(x / maxT * 100).toFixed(1)}%;background:${k === 'carburant' ? '#F97316' : '#0EA5E9'}"></div></div></div>`).join('') || '<div style="font-size:0.72rem;color:var(--text-4)">Aucune dépense.</div>';
+  const consoByDate = Object.fromEntries(s.consos.map(c => [c.date + '|' + c.km, c.conso]));
+  const pleins = (v.pleins || []).slice().sort((a, b) => b.date.localeCompare(a.date) || (+b.km || 0) - (+a.km || 0));
+  const act = (kind, id) => `<button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem" onclick="vehEdit('${kind}','${impEsc(id)}')">✎</button><button class="btn btn-ghost" style="padding:2px 7px;font-size:.68rem;color:#FCA5A5" onclick="vehDelete('${kind}','${impEsc(id)}')">🗑</button>`;
+  const deps = (v.depenses || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+  root.innerHTML = vehForm() + impCard('', head + kpis
+      + (rappels.length ? `<div class="immo-sec" style="margin-bottom:14px;font-size:0.8rem;line-height:1.8">${rappels.join('')}</div>` : '')
+      + `<div class="immo-grid" style="margin-top:0">
+          <div class="immo-sec"><div class="immo-sec-t">Coûts par poste</div>${parType}</div>
+          <div class="immo-sec"><div class="immo-sec-t">Consommation (L/100 km, entre pleins complets)</div>${vehConsoChart(s.consos) || '<div style="font-size:0.72rem;color:var(--text-4)">Le graphique apparaît à partir de trois pleins complets avec le kilométrage.</div>'}</div></div>`)
+    + impCard(`⛽ Pleins (${pleins.length})`, pleins.length ? impTable(['Date', 'Compteur', 'Volume', 'Prix/L', 'Montant', 'Conso', 'Station', ''], pleins.map(p => {
+        const c = consoByDate[p.date + '|' + (+p.km)];
+        return `<tr><td style="white-space:nowrap">${EmeraudeCore.isoToFr(p.date)}</td><td style="text-align:right">${p.km ? num(p.km, 0) + ' km' : '—'}</td><td style="text-align:right">${num(p.litres)} L${p.complet === false ? ' <span style="font-size:0.6rem;color:var(--text-4)">(partiel)</span>' : ''}</td>
+          <td style="text-align:right">${+p.prixLitre ? prix(p.prixLitre) : (+p.litres ? prix(EmeraudeCore.pleinMontant(p) / p.litres) : '—')}</td><td style="text-align:right">${impMoney(EmeraudeCore.pleinMontant(p))}</td>
+          <td style="text-align:right">${c != null ? num(c) + ' L/100' : ''}</td><td>${impEsc(p.station || '')}</td><td style="text-align:right;white-space:nowrap">${act('plein', p.id)}</td></tr>`;
+      })) : '<div style="font-size:0.75rem;color:var(--text-4)">Aucun plein. Ajoutez-les au fil de l’eau (bouton « ⛽ Plein ») : date, compteur, volume et prix.</div>')
+    + impCard(`🧾 Dépenses (${deps.length})`, deps.length ? impTable(['Date', 'Type', 'Détail', 'Compteur', 'Montant', ''], deps.map(e => `<tr><td style="white-space:nowrap">${EmeraudeCore.isoToFr(e.date)}</td><td>${impEsc(EmeraudeCore.VEHICULE_TYPES[e.type] || e.type)}</td>
+        <td>${impEsc(e.libelle || '')}</td><td style="text-align:right">${e.km ? num(e.km, 0) + ' km' : ''}</td><td style="text-align:right">${impMoney(e.montant)}</td><td style="text-align:right;white-space:nowrap">${act('depense', e.id)}</td></tr>`))
+      : '<div style="font-size:0.75rem;color:var(--text-4)">Aucune dépense : carte grise, assurance, entretien, contrôle technique, pneus, péages…</div>')
+    + `<div style="text-align:right;margin-top:-6px"><button class="btn btn-ghost" style="font-size:0.7rem;color:#FCA5A5" onclick="vehDelete('vehicule')">🗑 Supprimer ce véhicule</button></div>`;
 }
 
 // ......................................
@@ -6366,8 +7166,8 @@ function renderLiquidites() {
 
   const list = DATA.liquidites || [];
   const total = list.reduce((s, l) => s + l.solde, 0);
-  const depMensuel = (DATA.budget && DATA.budget.depenses)
-    ? DATA.budget.depenses.reduce((s, d) => s + d.montant, 0) : 1;
+  // Dépenses mensuelles de référence : prévision moyenne du budget sur 12 mois (programmés, prêts, budgets par catégorie)
+  const depMensuel = (() => { try { const f = EmeraudeCore.budgetForecast(DATA, todayISO().slice(0, 7), 12, { today: todayISO() }); return f.reduce((s, r) => s + r.depenses, 0) / f.length; } catch (e) { return 0; } })();
   const autonomie = depMensuel > 0 ? (total / depMensuel) : 0;
   // Taux moyen pondéré
   const tauxPondere = total > 0
@@ -7659,8 +8459,9 @@ function render() {
   }).join('');
 
   // Cashflow / Budget row
-  const revenus    = DATA.budget.revenus.reduce((s, r) => s + r.montant, 0);
-  const depenses   = DATA.budget.depenses.reduce((s, d) => s + d.montant, 0);
+  const bm = EmeraudeCore.budgetMonth(DATA, todayISO().slice(0, 7), { today: todayISO(), source: (DATA.budget.reglages || {}).source, inclureEmprunts: (DATA.budget.reglages || {}).inclureEmprunts !== false, comptes: (DATA.budget.reglages || {}).comptes || [] });
+  const revenus    = bm.revenus.total;
+  const depenses   = bm.depenses.total;
   const cashflow   = revenus - depenses;
   const txEpargne  = revenus > 0 ? cashflow / revenus * 100 : 0;
   const cfPos      = cashflow >= 0;
@@ -7673,9 +8474,9 @@ function render() {
   const svEp   = document.getElementById('sv-epargne');
   const stCf   = document.getElementById('st-cashflow');
   if (svRev) svRev.textContent = fmt(revenus);
-  if (stRev) stRev.textContent = DATA.budget.revenus.length + ' source' + (DATA.budget.revenus.length > 1 ? 's' : '');
+  if (stRev) stRev.textContent = 'ce mois-ci' + (bm.revenus.prevu ? ' (dont ' + fmt(bm.revenus.prevu) + ' à venir)' : '');
   if (svDep) svDep.textContent = fmt(depenses);
-  if (stDep) { stDep.textContent = DATA.budget.depenses.length + ' opération' + (DATA.budget.depenses.length > 1 ? 's' : ''); stDep.className = 'stat-trend'; }
+  if (stDep) { stDep.textContent = 'ce mois-ci' + (bm.depenses.prevu ? ' (dont ' + fmt(bm.depenses.prevu) + ' à venir)' : ''); stDep.className = 'stat-trend'; }
   if (svEp)  svEp.textContent  = txEpargne.toFixed(1) + '\u202F%';
   if (stCf)  { stCf.textContent = `Cashflow\u00a0: ${cfSign}\u00a0${fmt(Math.abs(cashflow))}`; stCf.className = 'stat-trend' + (cfPos ? '' : ' down'); }
 
@@ -7822,8 +8623,7 @@ function renderCrypto() {
   const root = document.getElementById('crypto-root');
   if (!root) return;
 
-  const isStale = !CRYPTO_LIVE.lastTs || (Date.now() - CRYPTO_LIVE.lastTs) > getLiveRefreshMs();
-  if (isStale && !CRYPTO_LIVE.loading) refreshCryptoLive(false);
+  if (cryptoRefreshDue()) setTimeout(() => refreshCryptoLive(false), 0);
 
   const grandTotal = cryptoGrandTotal();
   const wallet     = DATA.cryptoWallets.find(w => w.id === CRYPTO_UI.walletId) || DATA.cryptoWallets[0];
@@ -7832,7 +8632,7 @@ function renderCrypto() {
   const cryptoLiveStatus = CRYPTO_LIVE.loading
     ? 'Mise à jour des cours en cours...'
     : (CRYPTO_LIVE.lastTs
-      ? `Dernière MAJ : ${new Date(CRYPTO_LIVE.lastTs).toLocaleString('fr-FR')} · Source : ${CRYPTO_LIVE.lastSource || 'API web'} · ${CRYPTO_LIVE.updated} actif(s)`
+      ? `Cours du ${new Date(CRYPTO_LIVE.lastTs).toLocaleString('fr-FR')} · ${CRYPTO_LIVE.lastSource || 'API web'}` + ((CRYPTO_LIVE.missing || []).length ? ` · ⚠ sans cours en direct : ${CRYPTO_LIVE.missing.join(', ')} (prix saisi)` : ' · tous les actifs à jour')
       : 'Aucune donnée live récente.');
 
   // ── GLOBAL P/L (wallet scope)
@@ -7859,13 +8659,14 @@ function renderCrypto() {
     const pct      = wTotal > 0 ? (val / wTotal * 100).toFixed(1) : '0';
     const avgPrice = a.prixAchatMoyen || 0;
     const isStable = a.symbol === 'EUR' || a.symbol === 'USDT' || a.symbol === 'USDC';
+    const cgOk     = a.symbol === 'EUR' || !!COINGECKO_IDS[String(a.symbol || '').toUpperCase()];
     const pl       = avgPrice > 0 && !isStable ? ((a.prix - avgPrice) / avgPrice * 100) : 0;
     const plEur    = avgPrice > 0 && !isStable  ? a.qte * (a.prix - avgPrice) : 0;
     const plCls    = pl >= 0 ? 'amt-pos' : 'amt-neg';
     const plSign   = pl >= 0 ? '+' : '';
     const plEurSign = plEur >= 0 ? '+' : '';
     const qteDisplay  = isStable ? fmt(a.qte) : a.qte.toLocaleString('fr-FR', {maximumFractionDigits:8});
-    const prixDisplay = isStable ? '1,00 \u20AC' : fmt(a.prix);
+    const prixDisplay = a.symbol === 'EUR' ? '1,00 \u20AC' : (+a.prix || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: a.prix >= 100 ? 2 : a.prix >= 1 ? 3 : 5 }) + ' \u20AC';
     return `<div class="c3w">
       <div class="c3" style="cursor:pointer" onclick="openEditAsset('${a.symbol}')">
         <div class="shine"></div>
@@ -7888,6 +8689,7 @@ function renderCrypto() {
           <div>
             <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-4)">Prix actuel</div>
             <div style="font-size:0.82rem;font-weight:600;color:var(--text-2)">${prixDisplay}</div>
+            ${a.symbol === 'EUR' ? '' : `<div style="font-size:0.52rem;color:${cgOk ? 'var(--text-4)' : '#FCD34D'}">${!cgOk ? 'pas de cours en direct : prix saisi' : a.coursTs ? 'cours du ' + new Date(a.coursTs).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'en attente du cours'}</div>`}
           </div>
           <div>
             <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-4)">Valeur</div>
@@ -8030,7 +8832,7 @@ function renderCrypto() {
       </div></td>
       <td style="padding:8px 12px;text-align:right;color:var(--text-2)">${qteStr}</td>
       <td style="padding:8px 12px;text-align:right;color:var(--text-3)">${pru>0&&!isStable?fmt(pru):'--'}</td>
-      <td style="padding:8px 12px;text-align:right;color:var(--text-2)">${isStable?'1\u202F\u20AC':fmt(a.prix)}</td>
+      <td style="padding:8px 12px;text-align:right;color:var(--text-2)">${a.symbol==='EUR'?'1\u202F\u20AC':(+a.prix||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:a.prix>=100?2:a.prix>=1?3:5})+'\u202F\u20AC'}</td>
       <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--em-bright)">${fmt(val)}</td>
       <td style="padding:8px 12px;text-align:right" class="${cls}">${plE!==null?sg+fmt(Math.abs(plE)):'--'}</td>
       <td style="padding:8px 12px;text-align:right" class="${cls}">${plP!==null?sg+plP.toFixed(2)+'%':'--'}</td>
@@ -8982,8 +9784,10 @@ function impInitResult() {
       const bh = N(r.bankHint).split(' ')[0], ah = N(r.accountHint);
       acc = accounts.find(a => N(a.bank).includes(bh) && (N(a.type) === ah || N(a.nom).includes(ah)));
     }
+    if (!acc && r.accountType) acc = accounts.find(a => /carte/i.test(a.type) && (a.num + ' ' + a.nom).includes(r.carteFin || '§'));
     const isNum = hintDigits.length >= 5;
-    c.target = acc ? { accountId: acc.id } : { newAccount: { bankName: r.bankHint || '', nom: isNum ? 'Compte ' + hintDigits.slice(-4) : (r.accountHint || 'Compte courant'),
+    if (!acc && r.accountType) c.target = { newAccount: { bankName: r.bankHint || '', nom: r.accountHint, type: r.accountType, num: '…' + (r.carteFin || '') } };
+    else c.target = acc ? { accountId: acc.id } : { newAccount: { bankName: r.bankHint || '', nom: isNum ? 'Compte ' + hintDigits.slice(-4) : (r.accountHint || 'Compte courant'),
       type: isNum ? 'Compte Courant' : (r.accountHint || 'Compte Courant'), num: isNum ? r.accountHint : '' } };
   } else if (r.kind === 'crypto') {
     const w = (DATA.cryptoWallets || []).find(x => x.id === remembered) || (DATA.cryptoWallets || []).find(x => N(x.name) === N(r.walletHint));
@@ -9019,7 +9823,7 @@ function impArgs(importId) {
 function impSetTarget(v) {
   const c = IMP.cur, r = impRes();
   if (r.kind === 'crypto') c.target = v === '__new' ? { newWallet: r.walletHint || 'Wallet' } : { walletId: v };
-  else c.target = v === '__new' ? { newAccount: { bankName: r.bankHint || '', nom: r.accountHint && !/\d{5}/.test(r.accountHint) ? r.accountHint : 'Compte courant', type: 'Compte Courant', num: '' } } : { accountId: v };
+  else c.target = v === '__new' ? { newAccount: { bankName: r.bankHint || '', nom: r.accountHint && !/\d{5}/.test(r.accountHint) ? r.accountHint : 'Compte courant', type: r.accountType || 'Compte Courant', num: r.carteFin ? '…' + r.carteFin : '' } } : { accountId: v };
   c.balance = '';
   renderImports();
 }
@@ -9060,6 +9864,7 @@ function impApply() {
   saveData();
   render();
   IMP.msg = `✓ ${c.item.name} → ${e.cible} : ${impSummary(e)}`;
+  if (e.kind === 'bank') IMP.analyse = { accountId: e.accountId, importId: id, fichier: c.item.name };
   if (c.idx < c.results.length - 1) { c.idx++; impInitResult(); renderImports(); }
   else impNext();
 }
@@ -9078,7 +9883,7 @@ function impUndo(id) {
 }
 
 function impSummary(e) {
-  if (e.kind === 'bank') return `${e.ajoutes} opération(s) ajoutée(s), ${e.ignores} déjà présente(s) · solde ${impMoney(e.soldeAvant)} → ${impMoney(e.soldeApres)}${e.soldeSource === 'relevé' ? ' (solde du relevé)' : e.soldeSource === 'saisi' ? ' (saisi)' : ''}`;
+  if (e.kind === 'bank') return `${e.ajoutes} opération(s) ajoutée(s), ${e.ignores} déjà présente(s) · ${e.soldeSource === 'carte' ? 'carte à débit différé : solde inchangé' : `solde ${impMoney(e.soldeAvant)} → ${impMoney(e.soldeApres)}`}${e.soldeSource === 'relevé' ? ' (solde du relevé)' : e.soldeSource === 'saisi' ? ' (saisi)' : ''}`;
   if (e.kind === 'pea') return `${e.positions} position(s)${e.nouvelles?.length ? `, ${e.nouvelles.length} nouvelle(s)` : ''}${e.sorties?.length ? `, ${e.sorties.length} sortie(s)` : ''}`;
   if (e.kind === 'crypto') return `${e.ajoutes} opération(s) ${e.mode === 'remplacement' ? '(historique remplacé)' : `ajoutée(s), ${e.ignores} déjà présente(s)`}`;
   if (e.kind === 'revenus') return `${e.ajoutes} revenu(s) ajouté(s), ${e.ignores} déjà présent(s)`;
@@ -9294,6 +10099,7 @@ function renderImports() {
   const formats = EmeraudeCore.IMPORTERS.map(i => `<li>${impEsc(i.label)}</li>`).join('');
   root.innerHTML = `
     ${IMP.msg ? `<div style="padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:0.8rem;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--em-bright)">${impEsc(IMP.msg)}</div>` : ''}
+    ${impAnalyseCard()}
     ${DATA_TOO_NEW ? `<div style="padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:0.8rem;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);color:#FCA5A5">${impEsc(TOO_NEW_MSG)}</div>` : ''}
     ${impRenderWizard()}
     ${impCard('📥 Importer des fichiers', `
@@ -9312,13 +10118,14 @@ function renderImports() {
 
 // Mapping symbol ?' identifiant CoinGecko
 const COINGECKO_IDS = {
-  BTC: 'bitcoin', ETH: 'ethereum', CHSB: 'swissborg', BNB: 'binancecoin',
+  BTC: 'bitcoin', ETH: 'ethereum', CHSB: 'swissborg', BORG: 'swissborg', BNB: 'binancecoin',
+  USDC: 'usd-coin', USDT: 'tether', EURC: 'euro-coin', TRX: 'tron', SHIB: 'shiba-inu', PEPE: 'pepe', TON: 'the-open-network',
   SOL: 'solana', ADA: 'cardano', DOT: 'polkadot', MATIC: 'matic-network',
   LINK: 'chainlink', XRP: 'ripple', DOGE: 'dogecoin', LTC: 'litecoin',
   AVAX: 'avalanche-2', UNI: 'uniswap', ATOM: 'cosmos', NEAR: 'near',
 };
 
-const CRYPTO_LIVE = { loading:false, lastTs:0, lastSource:'', lastError:'', updated:0 };
+const CRYPTO_LIVE = { loading:false, lastTs:0, lastTry:0, lastSource:'', lastError:'', updated:0, missing:[], started:false };
 
 function getTrackedCryptoSymbols() {
   return [...new Set(
@@ -9328,54 +10135,32 @@ function getTrackedCryptoSymbols() {
   )];
 }
 
+// Cours crypto : CoinGecko (sans clé, appelable depuis une page web). CryptoCompare, l'ancienne
+// solution de repli, exige désormais une clé d'API (HTTP 401 vérifié le 2026-11-11) : retiré.
+// Symbole sans correspondance CoinGecko (COINGECKO_IDS) : cours laissé tel quel et signalé.
 async function fetchCryptoPricesLive(symbols) {
   const uniqueSymbols = [...new Set((symbols || []).map(s => String(s || '').toUpperCase()).filter(Boolean))];
   if (!uniqueSymbols.length) throw new Error('Aucun symbole crypto à récupérer');
-
-  const tryCoingecko = async () => {
-    const ids = uniqueSymbols.map(s => COINGECKO_IDS[s]).filter(Boolean);
-    if (!ids.length) throw new Error('no ids');
-    const resp = await fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=eur`,
-      { signal: AbortSignal.timeout(7000) }
-    );
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
-    const prices = {};
-    uniqueSymbols.forEach(s => { const id = COINGECKO_IDS[s]; if (id && data[id]?.eur) prices[s] = data[id].eur; });
-    if (!Object.keys(prices).length) throw new Error('empty');
-    return { prices, source: 'CoinGecko' };
-  };
-
-  const tryCryptoCompare = async () => {
-    const fsyms = uniqueSymbols.join(',');
-    const resp = await fetch(
-      `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${fsyms}&tsyms=EUR`,
-      { signal: AbortSignal.timeout(7000) }
-    );
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
-    if (data.Response === 'Error') throw new Error(data.Message || 'erreur');
-    const prices = {};
-    uniqueSymbols.forEach(s => { if (data[s]?.EUR) prices[s] = data[s].EUR; });
-    if (!Object.keys(prices).length) throw new Error('empty');
-    return { prices, source: 'CryptoCompare' };
-  };
-
-  try {
-    return await tryCoingecko();
-  } catch (_) {
-    return await tryCryptoCompare();
-  }
+  const ids = [...new Set(uniqueSymbols.map(s => COINGECKO_IDS[s]).filter(Boolean))];
+  const missing = uniqueSymbols.filter(s => !COINGECKO_IDS[s]);
+  if (!ids.length) throw new Error('Aucun symbole connu de CoinGecko (' + missing.join(', ') + ')');
+  const resp = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=eur&include_last_updated_at=true`, { signal: AbortSignal.timeout(10000) });
+  if (!resp.ok) throw new Error('CoinGecko HTTP ' + resp.status + (resp.status === 429 ? ' (trop de requêtes, réessai plus tard)' : ''));
+  const data = await resp.json();
+  const prices = {}, dates = {};
+  uniqueSymbols.forEach(s => { const x = data[COINGECKO_IDS[s]]; if (x && x.eur > 0) { prices[s] = x.eur; dates[s] = x.last_updated_at ? x.last_updated_at * 1000 : Date.now(); } else if (COINGECKO_IDS[s]) missing.push(s); });
+  if (!Object.keys(prices).length) throw new Error('CoinGecko : aucun cours reçu');
+  return { prices, dates, missing, source: 'CoinGecko' };
 }
 
-function applyCryptoLivePrices(prices) {
+function applyCryptoLivePrices(prices, dates) {
   let updated = 0;
   (DATA.cryptoWallets || []).forEach(w => {
     (w.assets || []).forEach(a => {
       const sym = String(a.symbol || '').toUpperCase();
       const p = +prices[sym];
       if (!Number.isFinite(p) || p <= 0) return;
+      a.coursTs = (dates && dates[sym]) || Date.now();
       if (Math.abs((+a.prix || 0) - p) < 0.0000001) return;
       a.prix = p;
       updated++;
@@ -9387,30 +10172,47 @@ function applyCryptoLivePrices(prices) {
   return updated;
 }
 
+// Comme les cours de bourse : enregistrés sur cet appareil seulement (pas d'envoi Google Drive à
+// chaque cours, cf. ptfSaveLocal), tableau de bord et page affichée rafraîchis.
 async function refreshCryptoLive(showNotice = false) {
   if (CRYPTO_LIVE.loading) return;
   CRYPTO_LIVE.loading = true;
   CRYPTO_LIVE.lastError = '';
+  CRYPTO_LIVE.lastTry = Date.now();
   try {
     const symbols = getTrackedCryptoSymbols();
     const result = await fetchCryptoPricesLive(symbols);
-    const updated = applyCryptoLivePrices(result.prices);
+    const updated = applyCryptoLivePrices(result.prices, result.dates);
     CRYPTO_LIVE.updated = updated;
     CRYPTO_LIVE.lastTs = Date.now();
     CRYPTO_LIVE.lastSource = result.source;
-    if (updated > 0) {
-      saveData();
-      saveSettings();
-    }
-    if (showNotice) alert(`Cours crypto mis à jour (${updated}) via ${result.source}.`);
+    CRYPTO_LIVE.missing = result.missing;
+    ptfSaveLocal();
+    saveSettings();
+    if (showNotice) alert(`Cours crypto mis à jour via ${result.source} (${Object.keys(result.prices).length} actif(s)).` + (result.missing.length ? `\n\nSans cours en direct (prix saisi conservé) : ${result.missing.join(', ')}` : ''));
   } catch (e) {
     CRYPTO_LIVE.lastError = e?.message || 'Flux crypto indisponible';
     if (showNotice) alert('Impossible de récupérer les cours crypto : ' + CRYPTO_LIVE.lastError);
   } finally {
     CRYPTO_LIVE.loading = false;
-    if (document.querySelector('.nav-item.active')?.dataset.page === 'crypto') renderCrypto();
-    if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres();
+    const page = document.querySelector('.nav-item.active')?.dataset.page;
+    if (page === 'crypto') renderCrypto();
+    else if (page === 'parametres') renderParametres();
+    else if (page === 'dashboard') render();
   }
+}
+function cryptoRefreshDue() {
+  if (CRYPTO_LIVE.loading || !getTrackedCryptoSymbols().length) return false;
+  return !CRYPTO_LIVE.lastTry || Date.now() - CRYPTO_LIVE.lastTry > getLiveRefreshMs();
+}
+function cryptoAutoRefresh() {
+  if (CRYPTO_LIVE.started) return;
+  CRYPTO_LIVE.started = true;
+  const tick = () => { if (document.visibilityState === 'visible' && navigator.onLine && cryptoRefreshDue()) refreshCryptoLive(false); };
+  setTimeout(tick, 3000);
+  setInterval(tick, 60 * 1000);
+  document.addEventListener('visibilitychange', tick);
+  window.addEventListener('online', tick);
 }
 
 async function fetchCoursAPI() {
@@ -9823,7 +10625,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1811-bb19b88';
+const APP_BUILD = '20261111-1924-cb75804';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
@@ -9906,10 +10708,46 @@ function updSettingsTab(sHd, tog, btnPri, btnSec) {
         : `Ce fichier est comparé au numéro de version publié sur ${impEsc(APP_PUBLIC_URL)}. Les données ne sont pas dans le fichier du logiciel.`}</div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button onclick="updCheck(true)" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${UPD.busy ? 'disabled' : ''}>Rechercher une mise à jour</button>
+        ${installButton(btnPri)}
         <div style="font-size:0.75rem;color:var(--text-3)">${statut}</div>
       </div>
     </div></div>
     ${tog('notifMaj', 'Me prévenir des nouvelles versions', 'Bandeau en haut de l’écran et pastille sur « Paramètres »')}`;
+}
+
+// ── Installer l'application (PWA) ──
+// Chrome/Edge proposent l'installation par l'événement beforeinstallprompt, capturé dès le
+// premier script de la page (window.__emInstall) : il peut arriver avant ce script.
+function installEtat() {
+  if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) return 'installee';
+  if (!IS_HOSTED) return 'local';
+  if (window.__emInstall) return 'pret';
+  if (window.__emInstalled) return 'installee';
+  return 'manuel';
+}
+function installButton(btnPri) {
+  const e = installEtat();
+  if (e === 'installee') return `<span style="font-size:0.75rem;color:var(--em-bright)">✓ Application installée</span>`;
+  return `<button onclick="installApp()" style="${btnPri};padding:8px 14px;font-size:0.75rem">📲 Installer l’application</button>`;
+}
+async function installApp() {
+  const e = installEtat();
+  if (e === 'local') {
+    if (confirm('L’installation se fait depuis la version en ligne :\n' + APP_PUBLIC_URL + '\n\nL’ouvrir maintenant ? (puis Paramètres › Version › Installer l’application)')) window.open(APP_PUBLIC_URL, '_blank', 'noopener');
+    return;
+  }
+  if (e === 'pret') {
+    const ev = window.__emInstall;
+    window.__emInstall = null;
+    try { await ev.prompt(); const r = await ev.userChoice; if (r && r.outcome === 'accepted') window.__emInstalled = true; } catch (err) {}
+    if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres();
+    return;
+  }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  alert(ios ? 'Sur iPhone / iPad (Safari) : bouton Partager ⬆ puis « Sur l’écran d’accueil ».'
+    : 'Le navigateur ne propose pas l’installation automatique ici (déjà installée, ou navigateur non compatible).\n\n'
+      + '• Chrome / Edge sur PC : icône ⊕ « Installer » à droite de la barre d’adresse, ou menu ⋮ › « Caster, enregistrer et partager » › « Installer la page en tant qu’application ».\n'
+      + '• Chrome sur Android : menu ⋮ › « Ajouter à l’écran d’accueil » › « Installer ».');
 }
 
 function updInit() {
@@ -9929,6 +10767,7 @@ fsInit();
 odInit();
 gdInit();
 ptfAutoRefresh();
+cryptoAutoRefresh();
 updInit();
 if ('serviceWorker' in navigator && odSecureContext()) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
