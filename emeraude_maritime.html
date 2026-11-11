@@ -1131,6 +1131,9 @@ html, body {
    inline : on les cible par attribut, d'où les !important.
 ............................................... */
 .nav-toggle, .sb-backdrop { display: none; }
+.maj-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; border-radius: 10px;
+  font-size: 0.8rem; color: var(--text-1); background: rgba(218,165,32,0.1); border: 1px solid rgba(218,165,32,0.4); }
+.maj-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold-base); margin-left: auto; box-shadow: 0 0 6px var(--gold-base); }
 .imp-drop {
   border: 2px dashed rgba(16,185,129,0.35); border-radius: 12px; padding: 22px 14px;
   text-align: center; cursor: pointer; transition: all 0.2s; background: rgba(16,185,129,0.03);
@@ -1588,7 +1591,7 @@ html, body {
 
     <div class="sb-foot">
       <div>Données locales · Hors-ligne</div>
-      <div style="margin-top:3px; opacity:0.5; font-size:0.58rem">Maritime Edition · v2.3</div>
+      <div style="margin-top:3px; opacity:0.5; font-size:0.58rem">Maritime Edition · <span class="app-version">v2.4</span></div>
     </div>
 
     <!-- Compass rose -->
@@ -1622,6 +1625,7 @@ html, body {
       <div class="topbar-right">
         <span id="fs-pill" class="sync-pill" style="display:none" onclick="fsPillClick()" title="Fichier de données local"></span>
         <span id="od-pill" class="sync-pill" style="display:none" onclick="odPillClick()" title="Synchronisation OneDrive"></span>
+        <span id="gd-pill" class="sync-pill" style="display:none" onclick="gdPillClick()" title="Synchronisation Google Drive"></span>
         <button id="theme-toggle" onclick="toggleTheme()" title="Mode jour / nuit" style="background:transparent;border:1px solid var(--glass-bd);border-radius:8px;padding:5px 9px;cursor:pointer;font-size:1rem;color:var(--text-2);transition:all 0.2s;line-height:1">☀</button>
         <div class="net-pill">
           <span class="net-pill-lbl">NET</span>
@@ -1632,6 +1636,7 @@ html, body {
     </div>
 
     <div class="content">
+      <div id="maj-banner" style="display:none"></div>
 
       <!-- ─── DASHBOARD ─── -->
       <div class="page active" id="page-dashboard">
@@ -2276,7 +2281,7 @@ DATA.cryptoWallets = [
 
 const PRET_UI = { pretId:null, tab:'synthese', simDate:'', simMontant:'', simMode:'duree', tPage:0, showForm:false };
 const TPAGE = 24;
-const PRET_TYPES = ['Immobilier','Consommation','Crédit Auto','Travaux','?tudiant','Professionnel','Autre'];
+const PRET_TYPES = ['Immobilier','Consommation','Crédit Auto','Travaux','Étudiant','Professionnel','Autre'];
 
 function selectPret(id) {
   PRET_UI.pretId = (PRET_UI.pretId === id) ? null : id;
@@ -2284,6 +2289,42 @@ function selectPret(id) {
   renderEmprunts();
 }
 function setPretTab(tab) { PRET_UI.tab = tab; renderEmprunts(); }
+// Modalités : préfinancement VEFA (déblocages, début d'amortissement), in fine, relais TVA, jour d'échéance
+const pretFind = id => (DATA.prets || []).find(p => p.id === id);
+function pretSet(id, field, v) {
+  const p = pretFind(id); if (!p) return;
+  p[field] = field === 'jourEcheance' ? (parseInt(v) || '') : v;
+  saveData(); renderEmprunts();
+}
+function pretSetDeb(id, i, field, v) {
+  const p = pretFind(id); if (!p) return;
+  p.deblocages[i][field] = field === 'montant' ? (parseFloat(v) || 0) : v;
+  saveData(); renderEmprunts();
+}
+function pretAddDeb(id) { const p = pretFind(id); if (!p) return; (p.deblocages = p.deblocages || []).push({ date: todayISO(), montant: 0 }); saveData(); renderEmprunts(); }
+function pretDelDeb(id, i) { const p = pretFind(id); if (!p) return; p.deblocages.splice(i, 1); saveData(); renderEmprunts(); }
+function pretModalitesCard(pret) {
+  const l = EmeraudeCore.loanAt(pret, todayISO());
+  const deb = pret.deblocages || [];
+  const id = impEsc(pret.id);
+  const sel = (field, opts, cur) => `<select class="form-select" onchange="pretSet('${id}', '${field}', this.value)">${opts.map(([v, lb]) => `<option value="${v}" ${(cur || '') === v ? 'selected' : ''}>${lb}</option>`).join('')}</select>`;
+  return `<div class="immo-sec" style="margin-top:14px">
+    <div class="immo-sec-t">Modalités du prêt</div>
+    <div class="form-grid">
+      ${impField('Type', sel('modalite', [['', 'Amortissable'], ['in fine', 'In fine (capital à la fin)']], pret.modalite === 'in fine' ? 'in fine' : ''))}
+      ${impField('Usage', sel('usage', [['', 'Financement du bien'], ['tva', 'Relais TVA (remboursé par l’État)']], pret.usage))}
+      ${impField('Jour des échéances', `<input class="form-input" type="number" min="1" max="28" value="${+pret.jourEcheance || ''}" placeholder="ex. 5" onchange="pretSet('${id}', 'jourEcheance', this.value)">`)}
+      ${impField('Début d’amortissement (1re échéance de capital)', `<input class="form-input" type="date" value="${impEsc(pret.dateDebutAmortissement || '')}" onchange="pretSet('${id}', 'dateDebutAmortissement', this.value)">`)}
+    </div>
+    <div style="font-size:0.72rem;color:var(--text-2);margin:6px 0 10px">Phase actuelle : <strong>${l.phase}</strong> · restant dû ${fmt(l.crd)}${deb.length ? ` · débloqué ${fmt(l.debloque)} sur ${fmt(pret.capitalEmprunte)} — les intérêts ne portent que sur les fonds débloqués${pret.dateDebutAmortissement ? '' : ' ; amortissement du capital à partir de la date à renseigner ci-dessus'}` : ''}</div>
+    <div style="font-size:0.66rem;color:var(--text-4);margin-bottom:6px">Déblocages de fonds (achat en VEFA) — laisser vide pour un prêt versé en une fois</div>
+    ${deb.map((d, i) => `<div class="immo-line" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto">
+      <input class="form-input" type="date" value="${impEsc(d.date)}" onchange="pretSetDeb('${id}', ${i}, 'date', this.value)">
+      <input class="form-input" type="number" step="0.01" value="${+d.montant || 0}" onchange="pretSetDeb('${id}', ${i}, 'montant', this.value)">
+      <button class="btn btn-ghost" style="padding:4px 9px" onclick="pretDelDeb('${id}', ${i})" title="Retirer">✕</button></div>`).join('')}
+    <button class="btn btn-ghost" style="padding:4px 10px" onclick="pretAddDeb('${id}')">➕ Déblocage</button>
+  </div>`;
+}
 function setPretPage(p)  { PRET_UI.tPage = p; renderEmprunts(); }
 function runSimulation() {
   PRET_UI.simDate    = document.getElementById('sim-date')?.value    || '';
@@ -2448,6 +2489,7 @@ function renderEmprunts() {
         </div>
         <div class="spark-range" id="pret-ev-range"></div>
         <div style="display:flex;justify-content:space-between;font-size:0.57rem;color:var(--text-4);padding:4px 0" id="pret-ev-labs"></div>
+        ${pretModalitesCard(pret)}
         ${pret.notes ? `<div style="font-size:0.72rem;color:var(--text-3);margin-top:12px;padding:10px 14px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.1);border-radius:8px">📝 ${pret.notes}</div>` : ''}
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
           <button class="btn btn-red" onclick="deletePret('${pret.id}')">✕ Supprimer ce prêt</button>
@@ -2611,7 +2653,8 @@ function renderEmprunts() {
 
   // Post-inject: draw synthèse chart
   if (pret && PRET_UI.tab === 'synthese') {
-    buildArea(yearlyData(pret.rows), 'pret-synth-area', 'pret-synth-line', 'pret-synth-dot', 540, 130, 8);
+    // (corrigé : appelait pret.rows, inexistant, et des identifiants absents du graphique)
+    buildArea(yearlyData(calcTableau(pret).rows), 'pret-ev-area', 'pret-ev-line', null, 540, 120, 8, 'pret-ev-yaxis');
   }
   if (pret && PRET_UI.tab === 'simulation' && PRET_UI.simDate && +PRET_UI.simMontant > 0) {
     const base = calcTableau(pret);
@@ -2625,8 +2668,9 @@ function renderEmprunts() {
 // PORTEFEUILLE
 // ......................................
 const PTF_UI = { posId:null, editPea:false, editPos:null, showAddPos:false, editOp:null, showAddOp:false };
-const PTFX   = {};   // live price cache { ticker:{ price, varJ, hist:[], ts } }
-const PTF_LIVE = { loading:false, lastTs:0, lastError:'', online:0, total:0 };
+// Cours en direct : Yahoo Finance refuse les appels d'une page web (CORS, vérifié le 2026-10-26),
+// ils passent donc par le relais Google Drive (action « cours »).
+const PTF_LIVE = { loading:false, lastTs:0, lastTry:0, lastError:'', online:0, total:0, started:false };
 
 function getLiveRefreshMs() {
   const fallbackMin = 5;
@@ -2649,138 +2693,148 @@ function selectPos(id) {
   PTF_UI.posId   = (PTF_UI.posId === id) ? null : id;
   PTF_UI.editPos = null;
   renderPortefeuille();
-  if (PTF_UI.posId) {
-    const p = DATA.portefeuille.positions.find(x => x.id === PTF_UI.posId);
-    if (p) ptfFetchPrice(p).then(() => ptfBuildPosCharts(p));
-  }
 }
 
-// ── API ───────────────────────────────────────────────────────────────────────
-async function ptfLookupTicker(query) {
-  if (!query) return null;
-  const endpoints = [
-    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`,
-    `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`,
-  ];
-  for (const url of endpoints) {
-    try {
-      const resp = await fetch(url, { credentials:'omit' });
-      if (!resp.ok) continue;
-      const json = await resp.json();
-      const symbol = json?.quotes?.[0]?.symbol || json?.news?.[0]?.symbol || null;
-      if (symbol) return symbol;
-    } catch(_) {}
-  }
-  return null;
-}
-
-async function ptfFetchChart(ticker) {
-  if (!ticker) return null;
-  const now = Date.now();
-  const c   = PTFX[ticker];
-  if (c && (now - c.ts) < 3_600_000) return c;
-  // Try v8 chart (weekly, 1 year) — works when served via HTTP; CORS blocks file:// in Chrome
-  const endpoints = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&range=1y`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&range=1y`,
-  ];
-  for (const url of endpoints) {
-    try {
-      const resp = await fetch(url, { credentials:'omit' });
-      if (!resp.ok) continue;
-      const json = await resp.json();
-      const r    = json?.chart?.result?.[0];
-      if (!r) continue;
-      const cls   = r.indicators.quote[0].close.map(v => v ?? null);
-      const ts    = r.timestamp;
-      const price = +(r.meta.regularMarketPrice ?? cls.filter(Boolean).at(-1)).toFixed(2);
-      const prev  = r.meta.chartPreviousClose   ?? cls.filter(Boolean).at(-2);
-      const varJ  = prev ? +((price - prev) / prev * 100).toFixed(2) : 0;
-      const hist  = cls.map((v, i) => ({ t: ts[i] * 1000, v })).filter(d => d.v != null);
-      const entry = { price, varJ, hist, ts: now };
-      PTFX[ticker] = entry;
-      return entry;
-    } catch(_) {}
-  }
-  return null;
-}
-
-async function ptfFetchPrice(target) {
-  const pos = (target && typeof target === 'object') ? target : null;
-  const knownTicker = (typeof target === 'string') ? target : (pos?.ticker || '');
-  let live = await ptfFetchChart(knownTicker);
-  if (live) return live;
-
-  const lookupQueries = pos ? [pos.isin, pos.nom] : [];
-  for (const query of lookupQueries) {
-    const ticker = await ptfLookupTicker(query);
-    if (!ticker) continue;
-    live = await ptfFetchChart(ticker);
-    if (live) {
-      if (pos) pos.ticker = ticker;
-      return live;
-    }
-  }
-  return null;
-}
-
+// ── Cours en direct (relais) ──────────────────────────────────────────────────
 function ptfLiveBadgeMarkup() {
   if (PTF_LIVE.loading) return '<span class="live-dot online"></span>Mise à jour en cours...';
   if (PTF_LIVE.total <= 0) return '<span class="live-dot offline"></span>Aucune position';
+  const err = PTF_LIVE.lastError ? ` title="${impEsc(PTF_LIVE.lastError)}"` : '';
   if (PTF_LIVE.online > 0) {
     const hhmm = PTF_LIVE.lastTs ? new Date(PTF_LIVE.lastTs).toLocaleTimeString('fr-FR', { hour:'2-digit', minute:'2-digit' }) : '--:--';
-    return `<span class="live-dot online"></span>En direct (${PTF_LIVE.online}/${PTF_LIVE.total}) · ${hhmm}`;
+    return `<span${err}><span class="live-dot online"></span>En direct (${PTF_LIVE.online}/${PTF_LIVE.total}) · ${hhmm}${PTF_LIVE.lastError ? ' ⚠' : ''}</span>`;
   }
-  if (PTF_LIVE.lastError) return `<span class="live-dot offline"></span>${PTF_LIVE.lastError}`;
-  return '<span class="live-dot offline"></span>Hors ligne';
+  const d = DATA.portefeuille.positions.map(p => p.coursDate || '').sort().pop();
+  return `<span${err}><span class="live-dot offline"></span>${impEsc(PTF_LIVE.lastError || 'Hors ligne')}${d ? ' · cours du ' + EmeraudeCore.isoToFr(d) : ''}</span>`;
+}
+
+// Cours enregistrés seulement sur cet appareil : ils sont recalculables partout, et un envoi
+// Google Drive à chaque cours provoquerait des conflits entre le PC et le smartphone.
+// Ils partent avec la prochaine vraie modification ; replaceDataSnapshot() les fusionne.
+function ptfSaveLocal() {
+  recalculateDerivedData();
+  try { localStorage.setItem('emeraude-data', JSON.stringify(DATA)); } catch(e) {}
 }
 
 async function ptfRefresh(showNotice = false) {
   if (PTF_LIVE.loading) return;
-  PTF_LIVE.loading = true;
-  PTF_LIVE.lastError = '';
-  const btn = document.getElementById('ptf-refresh-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '\u29d8 Chargement\u2026'; }
-  const ptf   = DATA.portefeuille;
-  let online  = 0, corsBlocked = false;
-  for (const p of ptf.positions) {
-    const live = await ptfFetchPrice(p);
-    if (live) { p.prixActuel = live.price; p.varJ = live.varJ; online++; }
-    else corsBlocked = true;
-  }
-  const cac = await ptfFetchPrice('^FCHI');
-  if (cac) { ptf.cac40.valeur = cac.price; ptf.cac40.varJ = cac.varJ; }
+  const ptf = DATA.portefeuille, today = todayISO();
   PTF_LIVE.total = ptf.positions.length;
+  PTF_LIVE.lastTry = Date.now();
+  if (!gdConfigured()) {
+    PTF_LIVE.online = 0;
+    PTF_LIVE.lastError = 'Cours en direct : connectez Google Drive (Paramètres › Sauvegarde)';
+    if (showNotice) alert(PTF_LIVE.lastError);
+    ptfRenderBadge();
+    return;
+  }
+  PTF_LIVE.loading = true;
+  const btn = document.getElementById('ptf-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⧘ Chargement…'; }
+  ptfRenderBadge();
+  const range = t => EmeraudeCore.quoteRange(EmeraudeCore.lastCloseDate(ptf.coursHist?.[t]), today);
+  const items = ptf.positions.filter(p => p.ticker || p.isin)
+    .map(p => ({ key: p.id, symbol: p.ticker || '', isin: p.isin || '', range: range(p.ticker) }));
+  items.push({ key: '^FCHI', symbol: '^FCHI', range: range('^FCHI') });
+  let online = 0;
+  const errors = [];
+  try {
+    const { cours } = await gdCall('cours', { items });
+    if (!cours) throw new Error(`Relais Google Drive en version ${GD.relayVersion ?? '?'} : redéployez-le (version ${GD_RELAY_EXPECTED} requise pour les cours)`);
+    for (const p of ptf.positions) {
+      const q = cours[p.id];
+      if (!q) continue;
+      if (q.error) { errors.push(`${p.nom} : ${q.error}`); continue; }
+      if (q.devise && q.devise !== (p.devise || 'EUR')) { errors.push(`${p.nom} : cours en ${q.devise} (${q.symbol}) — saisissez le ticker de la cotation en ${p.devise || 'EUR'}`); continue; }
+      p.ticker = q.symbol;
+      if (EmeraudeCore.applyQuote(ptf, p, q, today).ok) online++;
+    }
+    const cac = cours['^FCHI'];
+    if (cac && !cac.error && EmeraudeCore.applyQuote(ptf, ptf.cac40, cac, today).ok) {
+      const closes = ptf.coursHist['^FCHI'].closes;
+      ptf.cac40.valeur = ptf.cac40.prixActuel;
+      ptf.cac40.hist = Object.keys(closes).sort().slice(-30).map(d => closes[d]);
+    }
+    EmeraudeCore.fillDailyValues(ptf, today);
+    PTF_LIVE.lastError = errors.join(' · ');
+  } catch(e) {
+    PTF_LIVE.lastError = e?.message || String(e);
+  }
   PTF_LIVE.online = online;
-  if (online > 0) {
-    PTF_LIVE.lastTs = Date.now();
-    PTF_LIVE.lastError = '';
-  } else if (ptf.positions.length > 0) {
-    PTF_LIVE.lastError = corsBlocked ? 'CORS bloqué (servir via HTTP)' : 'Flux actions indisponible';
-  }
-  saveData();
-  if (showNotice) {
-    if (online > 0) alert(`Cours actions mis à jour (${online}/${ptf.positions.length}).`);
-    else alert('Aucun cours action récupéré en direct.');
-  }
+  if (online > 0) { PTF_LIVE.lastTs = Date.now(); ptfSaveLocal(); }
   PTF_LIVE.loading = false;
-  if (btn) { btn.disabled = false; btn.textContent = '\u29d8 Actualiser'; }
-  renderPortefeuille();
-  if (PTF_UI.posId) {
-    const p = ptf.positions.find(x => x.id === PTF_UI.posId);
-    if (p) ptfBuildPosCharts(p);
-  }
+  if (showNotice) alert(online > 0 ? `Cours mis à jour (${online}/${ptf.positions.length}).${errors.length ? '\n\n' + errors.join('\n') : ''}` : 'Aucun cours récupéré : ' + PTF_LIVE.lastError);
+  if (btn) { btn.disabled = false; btn.textContent = '⧘ Actualiser'; }
+  const page = document.querySelector('.nav-item.active')?.dataset.page;
+  if (page === 'portefeuille') renderPortefeuille();
+  else if (online > 0 && page === 'dashboard') render();
 }
 
+function ptfRenderBadge() {
+  const el = document.getElementById('ptf-live-badge');
+  if (el) el.innerHTML = ptfLiveBadgeMarkup();
+}
+
+// Au moins une mise à jour par jour d'ouverture, puis selon Paramètres › Cours des actifs ;
+// les jours sans connexion sont rattrapés par l'historique (quoteRange).
+function ptfRefreshDue() {
+  if (PTF_LIVE.loading || !DATA.portefeuille.positions.length || !gdConfigured()) return false;
+  return !PTF_LIVE.lastTry || Date.now() - PTF_LIVE.lastTry > getLiveRefreshMs();
+}
+function ptfAutoRefresh() {
+  if (PTF_LIVE.started) return;
+  PTF_LIVE.started = true;
+  const tick = () => { if (document.visibilityState === 'visible' && navigator.onLine && ptfRefreshDue()) ptfRefresh(false); };
+  setTimeout(tick, 5000);   // après la première synchronisation Google Drive
+  setInterval(tick, 60 * 1000);
+  document.addEventListener('visibilitychange', tick);
+  window.addEventListener('online', tick);
+}
+
+// Cours d'une position et valeur détenue, sur un an (une valeur par séance)
 function ptfBuildPosCharts(pos) {
-  const live = PTFX[pos.ticker];
-  let hist = (live?.hist?.length > 10)
-    ? live.hist.filter((_, i) => i % Math.max(1, Math.floor(live.hist.length / 24)) === 0).slice(-24).map(d => d.v)
-    : (pos.hist || []);
+  const closes = DATA.portefeuille.coursHist?.[pos.ticker]?.closes || {};
+  const from = EmeraudeCore.toISO(new Date(Date.now() - 365 * 86400000));
+  const days = Object.keys(closes).filter(d => d >= from).sort();
+  const hist = days.length > 1 ? days.map(d => closes[d]) : (pos.hist || []);
   if (!hist.length) return;
   const valHist = hist.map(v => +(v * pos.quantite / 1000).toFixed(2));
   buildArea(hist,    `ptf-pa-${pos.id}`, `ptf-pl-${pos.id}`, `ptf-pd-${pos.id}`, 340, 110, 10);
   buildArea(valHist, `ptf-va-${pos.id}`, `ptf-vl-${pos.id}`, `ptf-vd-${pos.id}`, 340, 110, 10);
+}
+
+// Valeur des titres jour par jour (DATA.portefeuille.valeurJour)
+const PTF_EVO = { jours: 90 };
+function ptfEvoSeries() {
+  const vj = DATA.portefeuille.valeurJour || {};
+  const from = EmeraudeCore.toISO(new Date(Date.now() - PTF_EVO.jours * 86400000));
+  return Object.keys(vj).filter(d => d >= from).sort().map(d => ({ d, v: vj[d] }));
+}
+function ptfSetEvo(n) { PTF_EVO.jours = n; renderPortefeuille(); }
+function ptfEvoCard() {
+  const s = ptfEvoSeries();
+  const first = s[0], last = s[s.length - 1];
+  const delta = first && last ? last.v - first.v : 0;
+  const btn = n => `<button class="btn ${PTF_EVO.jours === n ? 'btn-em' : 'btn-ghost'}" style="font-size:0.66rem;padding:3px 9px" onclick="ptfSetEvo(${n})">${n >= 365 ? Math.round(n / 365) + ' an' : n + ' j'}</button>`;
+  return `<div class="c3w" style="margin-bottom:14px"><div class="c3" style="padding:22px">
+  <div class="shine"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <div class="chart-hd" style="margin:0">Valeur des titres — jour par jour</div>
+    <div style="display:flex;gap:6px">${[30, 90, 365].map(btn).join('')}</div>
+  </div>
+  ${s.length > 1 ? `
+  <div style="font-size:0.72rem;color:var(--text-3);margin-bottom:8px">${EmeraudeCore.isoToFr(first.d)} → ${EmeraudeCore.isoToFr(last.d)} · ${s.length} jours · ${fmtVar(delta, ' €')} (${fmtVar(first.v ? delta / first.v * 100 : 0)})</div>
+  <svg width="100%" height="130" viewBox="0 0 700 130" preserveAspectRatio="none" overflow="visible">
+    <defs><linearGradient id="ptf-evo-g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/><stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path id="ptf-evo-a" fill="url(#ptf-evo-g)"/><path id="ptf-evo-l" fill="none" stroke="#10b981" stroke-width="2"/><circle id="ptf-evo-d" r="4" fill="#34d399"/>
+  </svg>` : `<div style="font-size:0.72rem;color:var(--text-3)">L’historique commence au premier jour où les cours sont récupérés ; ensuite une valeur par jour, y compris pour les jours où l’application n’a pas été ouverte.</div>`}
+</div></div>`;
+}
+function ptfBuildEvoChart() {
+  const s = ptfEvoSeries();
+  if (s.length > 1) buildArea(s.map(x => x.v), 'ptf-evo-a', 'ptf-evo-l', 'ptf-evo-d', 700, 130, 8);
 }
 
 // ── PEA edit ─────────────────────────────────────────────────────────────────
@@ -2915,9 +2969,7 @@ function renderPortefeuille() {
   const pos = ptf.positions;
   const cac = ptf.cac40;
 
-  const now = Date.now();
-  const isStale = !PTF_LIVE.lastTs || (now - PTF_LIVE.lastTs) > getLiveRefreshMs();
-  if (pos.length > 0 && isStale && !PTF_LIVE.loading) ptfRefresh(false);
+  if (ptfRefreshDue()) setTimeout(() => ptfRefresh(false), 0);
 
   const soldesTitres = pos.reduce((s, p) => s + p.quantite * p.prixActuel,     0);
   const coutTotal    = pos.reduce((s, p) => s + p.quantite * p.prixMoyenAchat, 0);
@@ -3040,6 +3092,8 @@ function renderPortefeuille() {
     </div></div>
   </div>
 </div>
+
+${ptfEvoCard()}
 
 <!-- Positions ────────────────────────────────────────────────────────────── -->
 <div class="c3w" style="margin-bottom:14px"><div class="c3" style="padding:22px">
@@ -3282,6 +3336,7 @@ function renderPortefeuille() {
 `;
 
   root.querySelectorAll('.c3').forEach(attachTilt);
+  ptfBuildEvoChart();
   if (selPos) ptfBuildPosCharts(selPos);
 }
 
@@ -3315,7 +3370,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // IMPORT_CORE_START — aucun accès au DOM ni à DATA global : les données sont passées en
 // paramètre. Ce bloc est extrait et testé par tests/run-tests.js (node tests/run-tests.js).
 const EmeraudeCore = (() => {
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 4;
 
   // ── Texte ───────────────────────────
   // Réparation du « double encodage » (UTF-8 relu en Windows-1252 : « Ã‰ » au lieu de « É »)
@@ -3949,6 +4004,7 @@ const EmeraudeCore = (() => {
       transactions: unionBy(x.transactions, y.transactions, cryptoFp),
       assets: mergeById((x.assets || []).map(s => Object.assign({ id: s.symbol }, s)), (y.assets || []).map(s => Object.assign({ id: s.symbol }, s))).map(s => { const o = Object.assign({}, s); delete o.id; return o; }) }));
     if (key === 'portefeuille') return Object.assign({}, cur, inc, { positions: mergeById(cur.positions, inc.positions) });
+    if (key === 'immobilierBiens') return mergeById(cur, inc, (x, y) => Object.assign({}, x, y));
     if (key === 'budget') { const o = Object.assign({}, cur); Object.keys(inc || {}).forEach(k => { o[k] = Array.isArray(inc[k]) ? mergeById(cur[k], inc[k]) : inc[k]; }); return o; }
     if (Array.isArray(cur)) return mergeById(cur, inc);
     if (typeof cur === 'object') return Object.assign({}, cur, inc);
@@ -4053,31 +4109,83 @@ const EmeraudeCore = (() => {
     const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
     return `${first.getUTCFullYear()}-${pad2(first.getUTCMonth() + 1)}-${pad2(Math.min(d, last))}`;
   }
-  // Échéancier d'un prêt amortissable — même formule que calcTableau() ; échéance n°k (1…n) k mois après le début
-  function loanSchedule(pret) {
-    const C = +pret.capitalEmprunte || 0, n = +pret.dureeMois || 0, start = toISO(pret.dateDebut);
-    if (!C || !n || !start) return [];
-    const tm = (+pret.tauxAnnuel || 0) / 1200, ass = C * (+pret.tauxAssuranceAnnuel || 0) / 1200;
-    const mens = tm < 1e-10 ? C / n : C * tm / (1 - Math.pow(1 + tm, -n));
-    const rows = []; let rest = C;
-    for (let k = 1; k <= n + 24 && rest > 0.005; k++) {
-      const interets = rest * tm, capital = Math.min(mens - interets, rest);
-      rest = Math.max(0, rest - capital);
-      rows.push({ k, date: addMonthsISO(start, k), interets, assurance: ass, capital, restant: rest });
+  // Échéancier d'un prêt. Trois cas :
+  //  • amortissable classique (même formule que calcTableau) : échéance n°k, k mois après dateDebut ;
+  //  • préfinancement (VEFA, pret.deblocages) : intérêts seuls sur les fonds déjà débloqués jusqu'à
+  //    dateDebutAmortissement (1re échéance d'amortissement), puis amortissement du capital sur dureeMois ;
+  //    sans cette date, intérêts seuls jusqu'à `horizon` ;
+  //  • in fine (pret.modalite) : intérêts seuls, capital remboursé à la dernière échéance (ex. relais TVA).
+  // pret.jourEcheance fixe le jour du mois des échéances (ex. 5).
+  function loanSchedule(pret, horizon) {
+    const C = +pret.capitalEmprunte || 0, n = +pret.dureeMois || 0;
+    const tm = (+pret.tauxAnnuel || 0) / 1200, tAss = (+pret.tauxAssuranceAnnuel || 0) / 1200;
+    const jour = Math.min(31, Math.max(0, +pret.jourEcheance || 0));
+    const ech = (base, k) => addMonthsISO(jour ? base.slice(0, 8) + pad2(jour) : base, k);
+    const deb = deblocages(pret);
+    const rows = [];
+    if (!C) return rows;
+    if (pret.modalite === 'in fine') {
+      const start = toISO(pret.dateDebut);
+      if (!n || !start) return rows;
+      for (let k = 1; k <= n; k++) rows.push({ k, date: ech(start, k), interets: C * tm, assurance: C * tAss, capital: k === n ? C : 0, restant: k === n ? 0 : C, phase: 'in fine' });
+      return rows;
     }
+    const amortir = (start, first) => {
+      const mens = tm < 1e-10 ? C / n : C * tm / (1 - Math.pow(1 + tm, -n));
+      let rest = C;
+      for (let i = 0; i < n + 24 && rest > 0.005; i++) {
+        const interets = rest * tm, capital = Math.min(mens - interets, rest);
+        rest = Math.max(0, rest - capital);
+        rows.push({ k: rows.length + 1, date: first ? ech(start, i) : ech(start, i + 1), interets, assurance: C * tAss, capital, restant: rest, phase: 'amortissement' });
+      }
+    };
+    if (deb.length) {
+      const amort = toISO(pret.dateDebutAmortissement);
+      const stop = amort || horizon || deb[0].date;
+      for (let k = 1; k <= 1200; k++) {
+        const d = ech(deb[0].date, k);
+        if (d >= stop && (amort || d > stop)) break;
+        const libere = debloqueAu(deb, d);
+        rows.push({ k, date: d, interets: libere * tm, assurance: libere * tAss, capital: 0, restant: libere, phase: 'préfinancement' });
+      }
+      if (amort && n) amortir(amort, true);
+      return rows;
+    }
+    const start = toISO(pret.dateDebut);
+    if (!n || !start) return rows;
+    amortir(start, false);
     return rows;
   }
-  // Situation d'un prêt à une date : capital restant dû (comme calcRestantActuel) et coût des 12 prochains mois
+  function deblocages(pret) {
+    return (pret.deblocages || []).map(d => ({ date: toISO(d.date), montant: +d.montant || 0 }))
+      .filter(d => d.date && d.montant).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  const debloqueAu = (deb, iso) => round2(deb.filter(d => d.date <= iso).reduce((s, d) => s + d.montant, 0));
+
+  // Situation d'un prêt à une date : capital restant dû, phase, coût des 12 prochains mois
   function loanAt(pret, today) {
-    const rows = loanSchedule(pret), start = toISO(pret.dateDebut);
-    const k = start ? monthsBetween(start, today) : 0;
-    const crd = !rows.length ? (+pret.capitalEmprunte || 0) : k <= 0 ? +pret.capitalEmprunte : k >= rows.length ? 0 : rows[k - 1].restant;
-    const next = rows.filter(r => r.k > k && r.k <= k + 12);
+    const C = +pret.capitalEmprunte || 0;
+    const rows = loanSchedule(pret, addMonthsISO(today, 13));
+    const deb = deblocages(pret);
+    const paid = rows.filter(r => r.date <= today);
+    const amort = toISO(pret.dateDebutAmortissement);
+    const enPrefinancement = deb.length > 0 && (!amort || today < amort);
+    let crd;
+    if (!rows.length && !deb.length) crd = C;                                   // prêt incomplet
+    else if (enPrefinancement) crd = debloqueAu(deb, today);                    // seuls les fonds débloqués sont dus
+    else if (deb.length) { const p = paid.filter(r => r.phase === 'amortissement'); crd = p.length ? p[p.length - 1].restant : C; }
+    else crd = paid.length ? paid[paid.length - 1].restant : C;
+    if (rows.length && paid.length === rows.length && !enPrefinancement) crd = 0;
+    const lim = addMonthsISO(today, 12);
+    const next = rows.filter(r => r.date > today && r.date <= lim);
     const sum = f => round2(next.reduce((s, r) => s + r[f], 0));
-    const m = rows[0] || { interets: 0, capital: 0, assurance: 0 };
-    return { rows, crd: round2(crd), mensualite: round2(m.interets + m.capital + m.assurance),
+    const m = next[0] || rows[0] || { interets: 0, capital: 0, assurance: 0 };
+    const phase = pret.modalite === 'in fine' ? 'in fine' : enPrefinancement ? 'préfinancement' : 'amortissement';
+    const dernier = rows.length ? rows[rows.length - 1] : null;
+    return { rows, crd: round2(crd), phase, debloque: deb.length ? debloqueAu(deb, today) : C,
+      mensualite: round2(m.interets + m.capital + m.assurance),
       next12: { interets: sum('interets'), assurance: sum('assurance'), capital: sum('capital'), total: round2(sum('interets') + sum('assurance') + sum('capital')) },
-      fin: rows.length ? rows[rows.length - 1].date : null, incomplet: !rows.length };
+      fin: dernier && dernier.phase !== 'préfinancement' ? dernier.date : null, incomplet: !rows.length && !deb.length };
   }
   // TRI : taux mensuel r tel que Σ flux_t / (1+r)^t = 0 (dichotomie), rendu annualisé
   function irr(flows) {
@@ -4108,11 +4216,25 @@ const EmeraudeCore = (() => {
     const prix = +bien.prixAchat || 0;
     const frais = { notaire: +bien.fraisNotaire || 0, agence: +bien.fraisAgence || 0, travaux: +bien.travaux || 0, mobilier: +bien.mobilier || 0, autres: +bien.autresFrais || 0 };
     const coutTotal = round2(prix + Object.values(frais).reduce((s, v) => s + v, 0));
-    const loans = (ctx.prets || []).filter(p => (bien.pretIds || []).includes(p.id)).map(p => Object.assign({ pret: p }, loanAt(p, today)));
-    const emprunte = round2(loans.reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0));
+    const tvaInfo = bien.tva || {};
+    // Prêt relais TVA : son capital est remboursé par l'État (remboursement de TVA), pas par les loyers
+    const loans = (ctx.prets || []).filter(p => (bien.pretIds || []).includes(p.id))
+      .map(p => Object.assign({ pret: p, tva: p.usage === 'tva' || tvaInfo.pretId === p.id }, loanAt(p, today)));
+    const emprunte = round2(loans.filter(l => !l.tva).reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0));
     const crd = round2(loans.reduce((s, l) => s + l.crd, 0));
-    const credit = ['interets', 'assurance', 'capital', 'total'].reduce((o, f) => (o[f] = round2(loans.reduce((s, l) => s + l.next12[f], 0)), o), {});
-    const apport = round2(coutTotal - emprunte);
+    const crdTva = round2(loans.filter(l => l.tva).reduce((s, l) => s + l.crd, 0));
+    const credit = { interets: round2(loans.reduce((s, l) => s + l.next12.interets, 0)), assurance: round2(loans.reduce((s, l) => s + l.next12.assurance, 0)),
+      capital: round2(loans.filter(l => !l.tva).reduce((s, l) => s + l.next12.capital, 0)) };
+    credit.total = round2(credit.interets + credit.assurance + credit.capital);
+    // Sans coût d'acquisition saisi, l'apport n'a pas de sens (il serait négatif)
+    const apport = coutTotal > 0 ? round2(coutTotal - emprunte) : 0;
+    // TVA de l'achat (VEFA) : avancée par prêt relais ou en fonds propres, puis remboursée par l'État
+    const tvaMontant = round2(+tvaInfo.montant || 0);
+    const tvaRembourseeLe = toISO(tvaInfo.rembourseeLe);
+    const tvaARecuperer = tvaRembourseeLe && tvaRembourseeLe <= today ? 0 : tvaMontant;
+    const tvaFondsPropres = tvaInfo.financement === 'fondsPropres' ? tvaMontant : 0;
+    const tva = { montant: tvaMontant, financement: tvaInfo.financement || '', aRecuperer: tvaARecuperer, fondsPropres: tvaFondsPropres,
+      rembourseeLe: tvaRembourseeLe, aReinvestir: tvaFondsPropres && !tvaARecuperer ? tvaFondsPropres : 0, detteRelais: crdTva };
     const vacance = Math.min(12, Math.max(0, +bien.vacanceMois || 0));
     const revenusTheo = round2((bien.revenus || []).reduce((s, l) => s + annualize(l), 0));
     const revenus = round2(revenusTheo * (12 - vacance) / 12);
@@ -4130,13 +4252,14 @@ const EmeraudeCore = (() => {
       const n = Math.max(1, monthsBetween(start, today));
       const net = (revenus - charges - impot) / 12;
       flows = new Array(n + 1).fill(0);
-      flows[0] = -apport;
+      flows[0] = -apport - tvaFondsPropres;
       for (let t = 1; t <= n; t++) flows[t] = net;
-      loans.forEach(l => {
-        const off = monthsBetween(start, toISO(l.pret.dateDebut));
-        l.rows.forEach(r => { const t = off + r.k; if (t >= 1 && t <= n) flows[t] -= r.interets + r.capital + r.assurance; });
-      });
-      flows[n] += valeur - crd;
+      loans.forEach(l => l.rows.forEach(r => {
+        const t = monthsBetween(start, r.date);
+        if (t >= 1 && t <= n && r.date <= today) flows[t] -= r.interets + r.assurance + (l.tva ? 0 : r.capital);
+      }));
+      if (tvaFondsPropres && !tvaARecuperer) { const t = Math.min(n, Math.max(1, monthsBetween(start, tvaRembourseeLe))); flows[t] += tvaFondsPropres; }
+      flows[n] += valeur - (crd - crdTva) + tvaARecuperer - crdTva;
       tri = apport > 0 ? irr(flows) : null;
     }
     // Flux réels des 12 derniers mois sur le compte bancaire dédié
@@ -4152,8 +4275,8 @@ const EmeraudeCore = (() => {
         categories: Object.entries(cats).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 8) };
       reel.net = round2(reel.entrees + reel.sorties);
     }
-    return { id: bien.id, nom: bien.nom, coutTotal, prix, frais, valeur, plusValue: round2(valeur - coutTotal), loans, emprunte, crd,
-      apport, patrimoineNet: round2(valeur - crd), revenusTheo, revenus, charges, impot, impotAuto: !!(reg && !reg.manuel), credit, cashflow,
+    return { id: bien.id, nom: bien.nom, coutTotal, prix, frais, valeur, plusValue: round2(valeur - coutTotal), loans, emprunte, crd, tva,
+      apport, patrimoineNet: round2(valeur - crd + tvaARecuperer), revenusTheo, revenus, charges, impot, impotAuto: !!(reg && !reg.manuel), credit, cashflow,
       cashflowMensuel: round2(cashflow / 12), enrichissement: round2(cashflow + credit.capital),
       rendBrut: ratio(revenusTheo), rendNet: ratio(revenus - charges), rendNetNet: ratio(revenus - charges - impot),
       rendApport: apport > 0 ? (cashflow + credit.capital) / apport : null, tri, flows, start, reel };
@@ -4165,6 +4288,7 @@ const EmeraudeCore = (() => {
     const t = { coutTotal: sum('coutTotal'), valeur: sum('valeur'), crd: sum('crd'), apport: sum('apport'), patrimoineNet: sum('patrimoineNet'),
       revenusTheo: sum('revenusTheo'), revenus: sum('revenus'), charges: sum('charges'), impot: sum('impot'), cashflow: sum('cashflow'),
       plusValue: sum('plusValue'), emprunte: sum('emprunte'),
+      tva: ['montant', 'aRecuperer', 'fondsPropres', 'aReinvestir', 'detteRelais'].reduce((o, f) => (o[f] = round2(items.reduce((s, a) => s + a.tva[f], 0)), o), {}),
       credit: ['interets', 'assurance', 'capital', 'total'].reduce((o, f) => (o[f] = round2(items.reduce((s, a) => s + a.credit[f], 0)), o), {}) };
     t.cashflowMensuel = round2(t.cashflow / 12);
     t.enrichissement = round2(t.cashflow + t.credit.capital);
@@ -4182,6 +4306,29 @@ const EmeraudeCore = (() => {
       t.triPartiel = dated.length < items.length;
     }
     return { items, total: t };
+  }
+
+  // ── Version de l'application (recherche de mise à jour) ──
+  // build = « aaaammjj-hhmm-empreinte », inscrit par publier.ps1 ; tout autre texte = fichier non publié
+  function buildInfo(build) {
+    const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})-(\w+)$/.exec(build || '');
+    return m ? { build, stamp: m[1] + m[2] + m[3] + m[4] + m[5], sha: m[6], date: `${m[1]}-${m[2]}-${m[3]}`, label: `${m[3]}/${m[2]}/${m[1]} à ${m[4]}h${m[5]}` } : null;
+  }
+  function compareVersions(a, b) {
+    const x = String(a || '').split('.').map(n => parseInt(n, 10) || 0), y = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return Math.sign(d); }
+    return 0;
+  }
+  // mine = { build, version } de l'appli ouverte ; published = contenu de version.json.
+  // Copie publiée : plus récente si publiée plus tard (ou même minute, autre commit).
+  // Fichier local non publié (copie de travail, souvent en avance) : seulement si le numéro de version publié est supérieur.
+  function updateStatus(mine, published) {
+    const theirs = buildInfo(published && published.build);
+    if (!theirs) return { newer: false, theirs: null, version: published && published.version };
+    const own = buildInfo(mine && mine.build);
+    const newer = own ? (theirs.stamp > own.stamp || (theirs.stamp === own.stamp && theirs.sha !== own.sha))
+      : compareVersions(published.version, mine && mine.version) > 0;
+    return { newer, theirs, version: published.version };
   }
 
   // ── Versions du format des données ──
@@ -4207,6 +4354,12 @@ const EmeraudeCore = (() => {
           if (b.regime == null) b.regime = '';
         });
       } },
+    { to: 4, label: 'Bourse : historique journalier des cours et de la valeur du portefeuille',
+      run(d) {
+        const pf = d.portefeuille = d.portefeuille || {};
+        if (!pf.coursHist || typeof pf.coursHist !== 'object') pf.coursHist = {};
+        if (!pf.valeurJour || typeof pf.valeurJour !== 'object') pf.valeurJour = {};
+      } },
   ];
   function migrate(d, today) {
     const from = +d.schemaVersion || 1;
@@ -4217,13 +4370,158 @@ const EmeraudeCore = (() => {
     return { from, to: SCHEMA_VERSION, applied };
   }
 
+  // ── Google Drive : chiffrement, lien de connexion, décision de synchronisation ──
+  // Le contenu envoyé au relais est chiffré dans le navigateur (AES-GCM, clé dérivée de la phrase
+  // de passe par PBKDF2-SHA-256) : le relais et Google ne voient que l'enveloppe.
+  const SEAL_FORMAT = 'chiffre-v1', SEAL_ITER = 600000;
+  const sealCache = { pass: null, sel: null, iter: 0, key: null };   // une seule dérivation par session
+  function b64Encode(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  function b64Decode(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+  async function sealKey(pass, sel, iter) {
+    if (sealCache.key && sealCache.pass === pass && sealCache.sel === sel && sealCache.iter === iter) return sealCache.key;
+    const subtle = globalThis.crypto.subtle;
+    const base = await subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+    const key = await subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: b64Decode(sel), iterations: iter },
+      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    Object.assign(sealCache, { pass, sel, iter, key });
+    return key;
+  }
+  function isSealed(text) {
+    try { const o = JSON.parse(text); return !!o && o.format === SEAL_FORMAT; } catch (e) { return false; }
+  }
+  async function sealText(text, pass) {
+    if (!pass) throw new Error('Phrase de passe manquante');
+    const reuse = sealCache.pass === pass && sealCache.sel;
+    const sel = reuse ? sealCache.sel : b64Encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+    const iter = reuse ? sealCache.iter : SEAL_ITER;
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const data = await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await sealKey(pass, sel, iter), new TextEncoder().encode(text));
+    return JSON.stringify({ app: 'emeraude', format: SEAL_FORMAT, kdf: 'PBKDF2-SHA-256', iter, sel, iv: b64Encode(iv), donnees: b64Encode(new Uint8Array(data)) });
+  }
+  async function openSealed(text, pass) {
+    const o = JSON.parse(text);
+    if (!o || o.format !== SEAL_FORMAT) throw new Error('Format chiffré inconnu');
+    try {
+      const plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64Decode(o.iv) }, await sealKey(pass, o.sel, +o.iter), b64Decode(o.donnees));
+      return new TextDecoder().decode(plain);
+    } catch (e) {
+      const err = new Error('Phrase de passe incorrecte (ou données Google Drive abîmées)'); err.badPass = true; throw err;
+    }
+  }
+  // « …#/drive?r=<adresse du relais>&t=<code secret> », ou un texte collé qui le contient
+  const RELAY_URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/[\w-]{20,}\/(exec|dev)$/;
+  function parseDriveLink(text) {
+    const m = /[#?&]r=([^&\s]+)&t=([a-f0-9]{40})(?![a-f0-9])/i.exec(String(text || ''));
+    if (!m) return null;
+    let url = '';
+    try { url = decodeURIComponent(m[1]); } catch (e) { return null; }
+    const k = RELAY_URL_RE.exec(url);
+    return k ? { url, token: m[2].toLowerCase(), dev: k[1] === 'dev' } : null;
+  }
+  // Révision distante / dernière révision synchronisée / modifications locales en attente
+  function syncPlan(remoteRev, knownRev, dirty) {
+    if (!remoteRev) return 'push';                 // fichier Drive encore vide
+    if (remoteRev === knownRev) return dirty ? 'push' : 'none';
+    return dirty ? 'conflict' : 'pull';
+  }
+  // Semaine ISO « AAAA-Sss » (nom des archives hebdomadaires)
+  function isoWeek(iso) {
+    const d = new Date(String(iso).slice(0, 10) + 'T00:00:00Z');
+    const day = (d.getUTCDay() + 6) % 7;
+    d.setUTCDate(d.getUTCDate() - day + 3);
+    const y = d.getUTCFullYear(), first = new Date(Date.UTC(y, 0, 4));
+    const w = 1 + Math.round(((d - first) / 86400000 - 3 + ((first.getUTCDay() + 6) % 7)) / 7);
+    return y + '-S' + String(w).padStart(2, '0');
+  }
+
+  // ── Cours de bourse : clôtures journalières et valeur du portefeuille jour par jour ──
+  // pf.coursHist[ticker] = { devise, closes: { 'AAAA-MM-JJ': clôture } } ; pf.valeurJour[date] =
+  // valeur des titres ce jour-là. Position : prixActuel + coursDate (date du cours).
+  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  function lastCloseDate(h) { return Object.keys((h && h.closes) || {}).reduce((a, b) => (a > b ? a : b), ''); }
+  // Historique à demander pour couvrir la période depuis le dernier cours connu (« 5d » = 5 séances)
+  function quoteRange(from, today) {
+    if (!from) return '1y';
+    const days = Math.round((Date.parse(today) - Date.parse(from)) / 86400000);
+    return days <= 4 ? '5d' : days <= 28 ? '1mo' : days <= 85 ? '3mo' : days <= 175 ? '6mo' : days <= 360 ? '1y' : days <= 720 ? '2y' : '5y';
+  }
+  // Cours à une date ; week-end et jour férié : dernière clôture précédente
+  function closeAt(h, iso) {
+    const c = (h && h.closes) || {};
+    if (c[iso] != null) return c[iso];
+    let best = '';
+    for (const k in c) if (k <= iso && k > best) best = k;
+    return best ? c[best] : null;
+  }
+  // q (relais) : { symbol, devise, prix, heure (ISO), closes: [[date, clôture]] } → met à jour l'historique et la cible
+  function applyQuote(pf, target, q, today) {
+    pf.coursHist = pf.coursHist || {};
+    const h = pf.coursHist[q.symbol] = pf.coursHist[q.symbol] || { closes: {} };
+    if (q.devise) h.devise = q.devise;
+    let added = 0;
+    (q.closes || []).forEach(([d, v]) => { if (+v > 0 && d <= today) { if (h.closes[d] == null && d < today) added++; h.closes[d] = +v; } });
+    const date = String(q.heure || '').slice(0, 10) || lastCloseDate(h);
+    const price = +q.prix > 0 ? +q.prix : closeAt(h, date);
+    if (!(price > 0)) return { added, ok: false };
+    if (h.closes[date] == null || date === today) h.closes[date] = price;
+    const pct = ref => (ref ? round2((price - ref) / ref * 100) : 0);
+    Object.assign(target, { prixActuel: price, coursDate: date, varJ: pct(closeAt(h, addDays(date, -1))),
+      varS: pct(closeAt(h, addDays(date, -7))), varM: pct(closeAt(h, addDays(date, -30))), varA: pct(closeAt(h, addDays(date, -365))) });
+    return { added, ok: true };
+  }
+  // Valeur des titres pour chaque jour depuis le premier jour enregistré. Jour manquant (appli
+  // fermée) : clôtures du jour × quantités actuelles. Aujourd'hui : cours du moment, provisoire,
+  // recalculé avec la clôture une fois la journée passée. Retourne le nombre de jours ajoutés.
+  function fillDailyValues(pf, today) {
+    const vj = pf.valeurJour = pf.valeurJour || {};
+    const pos = (pf.positions || []).filter(p => +p.quantite > 0);
+    let d = Object.keys(vj).reduce((a, b) => (a < b ? a : b), today), added = 0;
+    if (pf.valeurJourProvisoire && pf.valeurJourProvisoire < today) delete vj[pf.valeurJourProvisoire];
+    for (; d < today; d = addDays(d, 1)) {
+      if (vj[d] != null) continue;
+      let v = 0, ok = true;
+      for (const p of pos) { const c = closeAt(pf.coursHist && pf.coursHist[p.ticker], d); if (c == null) { ok = false; break; } v += p.quantite * c; }
+      if (ok) { vj[d] = round2(v); added++; }
+    }
+    vj[today] = round2(pos.reduce((s, p) => s + p.quantite * (+p.prixActuel || 0), 0));
+    pf.valeurJourProvisoire = today;
+    return added;
+  }
+  // Données reçues d'un autre appareil (dst) : on garde les cours et valeurs journalières connus ici
+  // seulement (src), et le cours le plus récent de chaque position
+  function mergeQuoteHistory(dst, src) {
+    if (!dst || !src) return;
+    const hs = src.coursHist || {}, hd = dst.coursHist = dst.coursHist || {};
+    Object.keys(hs).forEach(k => {
+      const t = hd[k] = hd[k] || { closes: {} };
+      if (!t.devise && hs[k].devise) t.devise = hs[k].devise;
+      t.closes = Object.assign({}, hs[k].closes || {}, t.closes || {});
+    });
+    const vs = src.valeurJour || {}, vd = dst.valeurJour = dst.valeurJour || {};
+    Object.keys(vs).forEach(d => { if (vd[d] == null && d !== src.valeurJourProvisoire) vd[d] = vs[d]; });
+    (dst.positions || []).forEach(p => {
+      const o = (src.positions || []).find(x => x.id === p.id);
+      if (o && o.coursDate && (!p.coursDate || o.coursDate > p.coursDate))
+        ['prixActuel', 'coursDate', 'varJ', 'varS', 'varM', 'varA'].forEach(k => { p[k] = o[k]; });
+      if (o && o.ticker && !p.ticker) p.ticker = o.ticker;
+    });
+    if (src.cac40 && src.cac40.coursDate && (!dst.cac40 || !dst.cac40.coursDate || src.cac40.coursDate > dst.cac40.coursDate)) dst.cac40 = src.cac40;
+  }
+
   return { SCHEMA_VERSION, IMPORTERS, MERGE_SECTIONS, repairMojibake, deepRepair, normText, parseNum, toISO, isoToFr,
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
-    planMerge, mergeSection, migrate, loanSchedule, loanAt, irr, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
+    planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, syncPlan, isoWeek,
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
 })();
 // IMPORT_CORE_END
 
+// Numéro de version de l'application : source unique (barre latérale, Paramètres, exports, publier.ps1)
+const APP_VERSION = '2.4';
 const todayISO = () => EmeraudeCore.toISO(new Date());
 // Données écrites par une version plus récente de l'appli : lecture seule (pas de synchro)
 let DATA_TOO_NEW = false;
@@ -4239,7 +4537,7 @@ function buildDataPayload() {
   recalculateDerivedData();
   return Object.assign({}, DATA, {
     _meta: Object.assign({}, DATA._meta || {}, {
-      version: '2.3',
+      version: APP_VERSION,
       app: 'Émeraude',
       lastSaved: new Date().toISOString(),
     })
@@ -4380,6 +4678,7 @@ function fsState() { return odReadLS('emeraude-fs-sync'); }
 function fsSetState(patch) { odWriteLS('emeraude-fs-sync', Object.assign(fsState(), patch)); }
 
 async function connectJSONSyncFile(create=false) {
+  if (SETTINGS.gdEnabled) { alert(GD_EXCLUSIVE_MSG); return; }
   if (!canUseJSONFileSync()) {
     alert('Ce navigateur ne permet pas l\'écriture directe vers un fichier local JSON. Utilisez Edge ou Chrome récent.');
     return;
@@ -4545,6 +4844,25 @@ function saveData() {
   scheduleJSONFileSync();
   scheduleHTMLFileSync();
   odMarkDirty();
+  gdMarkDirty();
+}
+// Biens immobiliers toujours présents (écrits en dur à la demande de Loïc) : créés vides s'ils
+// manquent, sur tout appareil, et non supprimables. Uniquement les noms : ce code est publié.
+const BIENS_FIXES = [
+  { id: 'immo-c1120', nom: 'Appartement C1120', code: 'C1120' },
+  { id: 'immo-c416', nom: 'Appartement C416', code: 'C416' },
+];
+function ensureBiensFixes() {
+  DATA.immobilierBiens = Array.isArray(DATA.immobilierBiens) ? DATA.immobilierBiens : [];
+  const compact = s => String(s || '').replace(/\s+/g, '').toUpperCase();
+  BIENS_FIXES.forEach(f => {
+    // Fiche déjà saisie (même identifiant, ou nom contenant le code) : on la marque seulement
+    const existant = DATA.immobilierBiens.find(b => b.id === f.id || new RegExp(f.code + '(?!\\d)').test(compact(b.nom)));
+    if (existant) { existant.fixe = true; return; }
+    DATA.immobilierBiens.push({ id: f.id, nom: f.nom, fixe: true, type: 'Appartement', ville: '', surface: '', dateAchat: '',
+      prixAchat: 0, fraisNotaire: 0, fraisAgence: 0, travaux: 0, mobilier: 0, autresFrais: 0, valeurActuelle: 0,
+      valeurAchat: 0, loyerMensuel: 0, pretIds: [], compteId: '', vacanceMois: 0, regime: '', impotAnnuel: 0, revenus: [], charges: [] });
+  });
 }
 function ensureDataShape() {
   if (!Array.isArray(DATA.transactions)) DATA.transactions = [];
@@ -4579,6 +4897,7 @@ function ensureDataShape() {
   // Mise à niveau du format des données (voir MIGRATIONS dans le noyau)
   const mig = EmeraudeCore.migrate(DATA, todayISO());
   DATA_TOO_NEW = !!mig.tooNew;
+  ensureBiensFixes();
   if (mig.applied.length) {
     // Enregistré localement seulement : le fichier partagé sera mis à niveau à la prochaine modification
     try { localStorage.setItem('emeraude-data', JSON.stringify(DATA)); } catch(e) {}
@@ -4586,9 +4905,12 @@ function ensureDataShape() {
 }
 function replaceDataSnapshot(d) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('invalid');
+  const localPf = DATA.portefeuille;
   Object.keys(DATA).forEach(k => { if (!k.startsWith('_')) delete DATA[k]; });
   Object.keys(d).forEach(k => { if (!k.startsWith('_')) DATA[k] = d[k]; });
   ensureDataShape();
+  // Cours : mis à jour par chaque appareil sans synchronisation, on ne perd pas ceux d'ici
+  EmeraudeCore.mergeQuoteHistory(DATA.portefeuille, localPf);
 }
 function loadData() {
   try {
@@ -4662,6 +4984,7 @@ function resetAllData() {
   location.reload();
 }
 loadData();
+ensureBiensFixes();
 
 function calcBanqueTotal() {
   const total = (DATA.banks || []).reduce((sum, bank) => sum + (bank.accounts || []).reduce((accSum, acc) => accSum + (+acc.solde || 0), 0), 0);
@@ -4840,7 +5163,19 @@ function calcMensualite(capital, tauxAnnuel, dureeMois) {
   return capital * tm / (1 - Math.pow(1 + tm, -dureeMois));
 }
 
+// Prêts en préfinancement (VEFA) ou in fine : échéancier du noyau (EmeraudeCore.loanSchedule)
+const pretSpecial = p => (p.deblocages || []).length > 0 || p.modalite === 'in fine';
+function calcTableauNoyau(pret) {
+  const today = todayISO();
+  const all = EmeraudeCore.loanSchedule(pret, EmeraudeCore.toISO(new Date(Date.now() + 2 * 365 * 86400000)));
+  const rows = all.map((r, i) => ({ mois: i + 1, date: r.date.slice(5, 7) + '/' + r.date.slice(0, 4), cap: +r.capital.toFixed(2),
+    int: +r.interets.toFixed(2), ass: +r.assurance.toFixed(2), rest: +r.restant.toFixed(2), phase: r.phase }));
+  const next = all.find(r => r.date > today) || all[all.length - 1] || { interets: 0, capital: 0, assurance: 0 };
+  return { rows, mens: +(next.interets + next.capital).toFixed(2), assM: +next.assurance.toFixed(2),
+    totalInt: +rows.reduce((s, r) => s + r.int, 0).toFixed(2), totalAss: +rows.reduce((s, r) => s + r.ass, 0).toFixed(2) };
+}
 function calcTableau(pret) {
+  if (pretSpecial(pret)) return calcTableauNoyau(pret);
   const tm   = pret.tauxAnnuel / 100 / 12;
   const assM = pret.capitalEmprunte * (pret.tauxAssuranceAnnuel || 0) / 100 / 12;
   const mens = calcMensualite(pret.capitalEmprunte, pret.tauxAnnuel, pret.dureeMois);
@@ -4869,14 +5204,9 @@ function calcTableau(pret) {
   };
 }
 
+// Capital restant dû aujourd'hui (préfinancement : seuls les fonds débloqués) — même calcul que l'immobilier
 function calcRestantActuel(pret) {
-  const now   = new Date();
-  const debut = new Date(pret.dateDebut);
-  const mois  = Math.max(0,
-    (now.getFullYear() - debut.getFullYear()) * 12 + (now.getMonth() - debut.getMonth()));
-  const { rows } = calcTableau(pret);
-  if (!mois || !rows.length) return pret.capitalEmprunte;
-  return rows[Math.min(mois - 1, rows.length - 1)].rest;
+  return EmeraudeCore.loanAt(pret, todayISO()).crd;
 }
 
 function calcSimulation(pret, simDateStr, simMontant, simMode) {
@@ -5677,6 +6007,7 @@ function immoCtx() {
 function immoNew() {
   IMMOB_UI.draft = { id: null, nom: '', type: 'Appartement', ville: '', surface: '', dateAchat: '', prixAchat: 0, fraisNotaire: 0, fraisAgence: 0,
     travaux: 0, mobilier: 0, autresFrais: 0, valeurActuelle: 0, pretIds: [], compteId: '', vacanceMois: 0, regime: 'lmnp-reel', impotAnnuel: 0,
+    tva: { montant: 0, financement: '', pretId: '', rembourseeLe: '' },
     revenus: [{ libelle: 'Loyer (hors charges)', montant: 0, periodicite: 'mensuel' }],
     charges: [['Copropriété', 'mensuel'], ['Taxe foncière', 'annuel'], ['Assurance PNO', 'annuel'], ['Comptable / CGA', 'annuel'], ['CFE', 'annuel']]
       .map(([c, p]) => ({ categorie: c, libelle: c, montant: 0, periodicite: p })) };
@@ -5685,7 +6016,10 @@ function immoNew() {
 function immoEdit(id) {
   const b = (DATA.immobilierBiens || []).find(x => x.id === id);
   if (!b) return;
-  IMMOB_UI.draft = JSON.parse(JSON.stringify(b));
+  const d = IMMOB_UI.draft = JSON.parse(JSON.stringify(b));
+  // Fiches créées vides ou complétées par un import partiel
+  d.revenus = d.revenus || []; d.charges = d.charges || []; d.pretIds = d.pretIds || [];
+  d.tva = Object.assign({ montant: 0, financement: '', pretId: '', rembourseeLe: '' }, d.tva);
   renderImmobilier();
   document.getElementById('immobilier-root')?.scrollIntoView({ behavior: 'smooth' });
 }
@@ -5725,11 +6059,13 @@ function immoSave() {
 }
 function immoDelete(id) {
   const b = (DATA.immobilierBiens || []).find(x => x.id === id);
+  if (b && b.fixe) { alert(`« ${b.nom} » fait partie des biens permanents : il ne peut pas être supprimé.`); return; }
   if (!b || !confirm(`Supprimer la fiche « ${b.nom} » ? (Les prêts liés et le compte bancaire ne sont pas supprimés.)`)) return;
   DATA.immobilierBiens = DATA.immobilierBiens.filter(x => x.id !== id);
   saveData(); render(); renderImmobilier();
 }
 function immoToggle(id) { IMMOB_UI.openId = IMMOB_UI.openId === id ? null : id; renderImmobilier(); }
+function immoSetTva(field, v) { IMMOB_UI.draft.tva[field] = field === 'montant' ? (parseFloat(v) || 0) : v; if (field === 'financement') renderImmobilier(); }
 function immoSetTMI(v) { SETTINGS.immoTMI = +v; saveSettings(); renderImmobilier(); }
 function immoGoEmprunts() { document.querySelector('.nav-item[data-page="emprunts"]')?.click(); }
 
@@ -5757,6 +6093,7 @@ function immoKpis(T) {
     ${tile('Capital restant dû', immoEur(T.crd), `emprunté ${immoEur(T.emprunte)}`)}
     ${tile('Patrimoine net immobilier', immoEur(T.patrimoineNet), `plus-value latente ${immoEur(T.plusValue)}`, immoCls(T.patrimoineNet))}
     ${tile('Apport investi', immoEur(T.apport), 'coût total − emprunts')}
+    ${T.tva && T.tva.montant ? tile('TVA à récupérer', immoEur(T.tva.aRecuperer), T.tva.aReinvestir ? `${immoEur(T.tva.aReinvestir)} récupérés, à réinvestir` : `dont ${immoEur(T.tva.fondsPropres)} avancés en fonds propres`) : ''}
     ${tile('Cash-flow mensuel', immoEur(T.cashflowMensuel), 'après charges, impôt et crédit', immoCls(T.cashflow))}
     ${tile('Enrichissement annuel', immoEur(T.enrichissement), `dont capital remboursé ${immoEur(T.credit.capital)}`, immoCls(T.enrichissement))}
     ${tile('Rendement brut', immoPct(T.rendBrut), 'loyers / coût total')}
@@ -5782,6 +6119,7 @@ function immoDetail(b, a) {
     <div><div style="font-size:1rem;font-weight:700;color:var(--text-1)">🏠 ${impEsc(b.nom)}</div>
       <div style="font-size:0.68rem;color:var(--text-4)">${impEsc([b.type, b.ville, b.surface ? b.surface + ' m²' : '', b.dateAchat ? 'acheté le ' + EmeraudeCore.isoToFr(b.dateAchat) : ''].filter(Boolean).join(' · '))}</div></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-3)">
+      ${a.coutTotal ? '' : '<span style="color:var(--gold-base)">✎ à compléter : prix et frais d’achat, loyers</span>'}
       <span>Net-net <strong style="color:var(--text-1)">${immoPct(a.rendNetNet)}</strong></span>
       <span>TRI <strong class="${a.tri == null ? '' : immoCls(a.tri)}">${immoPct(a.tri)}</strong></span>
       <span>Cash-flow <strong class="${immoCls(a.cashflow)}">${immoEur(a.cashflowMensuel)}/mois</strong></span>
@@ -5790,9 +6128,10 @@ function immoDetail(b, a) {
   const loans = a.loans.length ? a.loans.map(l => `<div style="margin-bottom:8px">
       <div style="font-size:0.78rem;color:var(--text-1)">${impEsc(l.pret.nom || 'Prêt')} <span style="color:var(--text-4)">· ${impEsc(l.pret.banque || '')}</span></div>
       ${immoRow('Capital emprunté · taux', `${immoEur(l.pret.capitalEmprunte)} · ${String(l.pret.tauxAnnuel).replace('.', ',')} %`)}
-      ${immoRow('Mensualité (assurance incluse)', fmtE(l.mensualite) + ' €')}
+      ${immoRow('Phase', l.phase + (l.phase === 'préfinancement' ? ` · débloqué ${immoEur(l.debloque)}` : '') + (l.tva ? ' · relais TVA' : ''))}
+      ${immoRow(l.phase === 'amortissement' ? 'Mensualité (assurance incluse)' : 'Échéance actuelle (intérêts)', fmtE(l.mensualite) + ' €')}
       ${immoRow('Capital restant dû', immoEur(l.crd))}
-      ${immoRow('Fin du prêt', l.fin ? EmeraudeCore.isoToFr(l.fin) : '—')}
+      ${immoRow('Fin du prêt', l.fin ? EmeraudeCore.isoToFr(l.fin) : 'à définir (début d’amortissement à renseigner)')}
       ${l.incomplet ? '<div style="font-size:0.66rem;color:var(--gold-base)">Prêt incomplet (durée, taux ou date de début manquants)</div>' : ''}</div>`).join('')
       + immoRow('12 prochains mois : intérêts', immoEur(a.credit.interets)) + immoRow('assurance', immoEur(a.credit.assurance)) + immoRow('capital remboursé', immoEur(a.credit.capital))
     : '<div style="font-size:0.72rem;color:var(--text-4)">Aucun prêt lié. Créez les prêts dans <a href="#" onclick="immoGoEmprunts();return false" style="color:var(--em-bright)">Emprunts</a>, puis liez-les via « Modifier ».</div>';
@@ -5809,7 +6148,10 @@ function immoDetail(b, a) {
     ${sec('Acquisition', `${immoRow('Prix net vendeur', immoEur(a.prix))}${immoRow('Frais de notaire', immoEur(a.frais.notaire))}${immoRow('Frais d’agence', immoEur(a.frais.agence))}
       ${immoRow('Travaux', immoEur(a.frais.travaux))}${immoRow('Mobilier', immoEur(a.frais.mobilier))}${immoRow('Autres frais', immoEur(a.frais.autres))}
       ${immoRow('Coût total', immoEur(a.coutTotal), '', true)}${immoRow('Valeur estimée', immoEur(a.valeur))}${immoRow('Plus-value latente', immoEur(a.plusValue), immoCls(a.plusValue))}
-      ${immoRow('Apport', immoEur(a.apport))}${immoRow('Patrimoine net (valeur − restant dû)', immoEur(a.patrimoineNet), immoCls(a.patrimoineNet), true)}`)}
+      ${immoRow('Apport', immoEur(a.apport))}
+      ${a.tva.montant ? immoRow(`TVA (${a.tva.financement === 'pret' ? 'prêt relais' : a.tva.financement === 'fondsPropres' ? 'fonds propres' : 'financement ?'})`, a.tva.aRecuperer ? `${immoEur(a.tva.aRecuperer)} à récupérer` : `récupérée le ${EmeraudeCore.isoToFr(a.tva.rembourseeLe)}`) : ''}
+      ${a.tva.aReinvestir ? immoRow('TVA récupérée, à réinvestir', immoEur(a.tva.aReinvestir), 'amt-pos') : ''}
+      ${immoRow('Patrimoine net (valeur − restant dû' + (a.tva.aRecuperer ? ' + TVA à récupérer' : '') + ')', immoEur(a.patrimoineNet), immoCls(a.patrimoineNet), true)}`)}
     ${sec('Financement', loans)}
     ${sec('Exploitation (par an)', `${lines(b.revenus, '+')}${+b.vacanceMois ? immoRow(`Vacance (${b.vacanceMois} mois/an)`, '−' + immoEur(a.revenusTheo - a.revenus), 'amt-neg') : ''}
       ${immoRow('Loyers retenus', immoEur(a.revenus), 'amt-pos', true)}${lines(b.charges, '−')}${immoRow('Charges', '−' + immoEur(a.charges), 'amt-neg', true)}
@@ -5821,7 +6163,7 @@ function immoDetail(b, a) {
     ${sec('Réel : compte dédié, 12 derniers mois', reel)}
   </div>
   <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-em" onclick="immoEdit('${impEsc(b.id)}')">✎ Modifier</button>
-    <button class="btn btn-ghost" style="color:#FCA5A5" onclick="immoDelete('${impEsc(b.id)}')">🗑 Supprimer</button></div>`);
+    ${b.fixe ? '' : `<button class="btn btn-ghost" style="color:#FCA5A5" onclick="immoDelete('${impEsc(b.id)}')">🗑 Supprimer</button>`}</div>`);
 }
 
 function immoForm() {
@@ -5850,6 +6192,12 @@ function immoForm() {
       ${num('travaux', 'Travaux')}${num('mobilier', 'Mobilier')}${num('autresFrais', 'Autres frais (dossier, garantie…)')}</div>`)}
     ${sec('Financement', prets + `<div style="font-size:0.68rem;margin-top:4px"><a href="#" onclick="immoGoEmprunts();return false" style="color:var(--em-bright)">➕ Créer un prêt dans Emprunts</a> (la saisie en cours ici est conservée)</div>`,
       'Cochez les prêts qui financent ce bien : mensualités, intérêts et capital restant dû sont repris automatiquement.')}
+    ${sec('TVA de l’achat (VEFA)', `<div class="form-grid">
+        ${impField('Montant de la TVA', `<input class="form-input" type="number" step="0.01" value="${+d.tva.montant || 0}" onchange="immoSetTva('montant', this.value)">`)}
+        ${impField('Avancée par', `<select class="form-select" onchange="immoSetTva('financement', this.value)">${[['', '—'], ['pret', 'Prêt relais TVA'], ['fondsPropres', 'Fonds propres']].map(([v, l]) => `<option value="${v}" ${d.tva.financement === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+        ${d.tva.financement === 'pret' ? impField('Prêt relais', `<select class="form-select" onchange="immoSetTva('pretId', this.value)"><option value="">—</option>${(DATA.prets || []).map(p => `<option value="${impEsc(p.id)}" ${d.tva.pretId === p.id ? 'selected' : ''}>${impEsc(p.nom || p.id)}</option>`).join('')}</select>`) : ''}
+        ${impField('Remboursée par l’État le', `<input class="form-input" type="date" value="${impEsc(d.tva.rembourseeLe || '')}" onchange="immoSetTva('rembourseeLe', this.value)">`)}</div>`,
+      'TVA payée à l’achat et remboursée ensuite par l’État : comptée comme créance à récupérer (hors coût du bien). Avancée en fonds propres, elle redevient disponible à réinvestir une fois remboursée.')}
     ${sec('Compte bancaire dédié', impField('Compte', `<select class="form-select" onchange="immoSet('compteId', this.value)"><option value="">—</option>${comptes.map(c => `<option value="${impEsc(c.id)}" ${d.compteId === c.id ? 'selected' : ''}>${impEsc(c.nom)}</option>`).join('')}</select>`),
       'Facultatif : le compte où arrivent les loyers et partent les charges (ex. compte LMNP), pour comparer le prévu au réel.')}
     ${sec('Revenus', d.revenus.map((l, i) => `<div class="immo-line">
@@ -5890,6 +6238,7 @@ function renderImmobilier() {
       <li><strong>Rendement brut</strong> = loyers annuels (sans vacance) / coût total. <strong>Net</strong> : loyers après vacance − charges. <strong>Net-net</strong> : − impôt aussi.</li>
       <li><strong>Cash-flow</strong> = loyers − charges − impôt − échéances des 12 prochains mois (intérêts + assurance + capital).</li>
       <li><strong>Enrichissement</strong> = cash-flow + capital remboursé (la part du crédit qui augmente votre patrimoine). <strong>Rendement de l’apport</strong> = enrichissement / apport.</li>
+      <li><strong>TVA (VEFA)</strong> : hors coût du bien, comptée comme créance à récupérer. Le capital d’un prêt relais TVA est remboursé par l’État, pas par les loyers : seuls ses intérêts entrent dans le cash-flow. <strong>Préfinancement</strong> : seuls les fonds débloqués sont dus et portent intérêts.</li>
       <li><strong>Rendement global (TRI)</strong> : taux annuel qui égalise l’apport versé à l’achat, les flux mensuels depuis (loyers − charges − impôt − échéances réelles des prêts) et la valeur nette d’aujourd’hui (valeur estimée − capital restant dû), comme si le bien était revendu à sa valeur estimée, sans frais de revente ni impôt sur la plus-value. Loyers et charges actuels supposés constants depuis l’achat.</li>
     </ul></details>`;
   root.innerHTML = immoForm()
@@ -7798,12 +8147,14 @@ const SETTINGS_DEFAULTS = {
   jsonFileAutoSync: false,
   importProfiles: [],   // CSV quelconques : colonnes associées par l'utilisateur
   importTargets: {},    // dernier compte/wallet choisi par lecteur (présélection)
+  notifMaj: true,       // bandeau « nouvelle version disponible »
   immoTMI: 30,          // tranche marginale d'imposition (calcul de l'impôt en micro-BIC / micro-foncier)
   htmlFileAutoSync: false,
   odEnabled: false,
   odClientId: '',
   odTenant: 'consumers',
   odDossier: 'Visual Studio Project/Emeraude/DATA Actif',  // dossier OneDrive des données (vide = dossier d'application)
+  gdEnabled: false,     // Google Drive (relais) : adresse et code secret dans localStorage['emeraude-gd-auth']
   btcPrix: 65000,
   ethPrix: 3200,
   chsbPrix: 0.35,
@@ -7863,6 +8214,7 @@ function odB64url(bytes) {
 }
 
 async function odLogin(silent=false) {
+  if (SETTINGS.gdEnabled) { alert(GD_EXCLUSIVE_MSG); return; }
   if (!odSecureContext()) {
     alert('La connexion OneDrive nécessite l\'application installée/hébergée (https://…) ou http://localhost. Elle ne fonctionne pas en ouvrant le fichier HTML directement.');
     return;
@@ -8096,6 +8448,326 @@ async function odInit() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') odSync(); });
   setInterval(() => { if (document.visibilityState === 'visible') odSync(); }, 2 * 60 * 1000);
   odSync();
+}
+
+// ......................................
+// SYNCHRONISATION GOOGLE DRIVE (relais Apps Script personnel)
+// ......................................
+// Le fichier « emeraude › emeraude_data.json » du Google Drive de Loïc est lu et écrit par un
+// relais Google Apps Script (relais/Code.gs) qui tourne sur son compte. L'application l'appelle
+// avec un code secret reçu par le lien de connexion (…#/drive?r=<relais>&t=<code>). Fonctionne
+// aussi en file://. Le contenu est chiffré dans le navigateur (EmeraudeCore.sealText) : la phrase
+// de passe ne quitte jamais l'appareil. Écriture conditionnelle par numéro de révision
+// (expectedRev), équivalent du If-Match de OneDrive. localStorage reste le cache hors ligne.
+const GD = { busy:false, again:false, rev:0, timer:null, lastError:'', needPass:false, pass:'', relayVersion:null, started:false };
+const GD_RELAY_EXPECTED = 2;   // RELAY_VERSION de relais/Code.gs (2 : cours de bourse)
+const GD_EXCLUSIVE_MSG = 'Les données sont synchronisées par Google Drive : déconnectez d’abord Google Drive (Paramètres › Sauvegarde) pour utiliser une autre synchronisation.';
+function gdAuth() { return odReadLS('emeraude-gd-auth'); }
+function gdState() { return odReadLS('emeraude-gd-sync'); }
+function gdSetState(patch) { odWriteLS('emeraude-gd-sync', Object.assign(gdState(), patch)); }
+function gdConfigured() { const a = gdAuth(); return !!(SETTINGS.gdEnabled && a.url && a.token); }
+function gdStoredPass() { try { return localStorage.getItem('emeraude-gd-pass') || ''; } catch(e) { return ''; } }
+function gdRememberPass(pass, remember) {
+  try { if (remember) localStorage.setItem('emeraude-gd-pass', pass); else localStorage.removeItem('emeraude-gd-pass'); } catch(e) {}
+}
+
+// text/plain obligatoire : avec application/json le navigateur envoie une requête préalable (CORS) qu'Apps Script refuse
+async function gdCall(action, data={}, auth=gdAuth()) {
+  let res;
+  try {
+    res = await fetch(auth.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({}, data, { action, token: auth.token })) });
+  } catch(e) { throw new Error(navigator.onLine ? 'Relais Google Drive injoignable' : 'Hors ligne — synchronisation au retour du réseau'); }
+  if (!res.ok) throw new Error('Relais Google Drive : HTTP ' + res.status);
+  let j;
+  // Une page HTML à la place du JSON : déploiement archivé ou adresse changée
+  try { j = await res.json(); } catch(e) { throw new Error('Relais Google Drive : réponse illisible — l’adresse du relais a peut-être changé, rouvrez le lien de connexion.'); }
+  if (j && j.error) throw new Error(j.code === 401 ? 'Code secret refusé par le relais : rouvrez le lien de connexion (Paramètres › Sauvegarde).' : 'Relais Google Drive : ' + j.error);
+  return j;
+}
+
+async function gdDecode(content, pass=GD.pass) {
+  const text = EmeraudeCore.isSealed(content) ? await EmeraudeCore.openSealed(content, pass) : content;
+  const d = JSON.parse(text);
+  if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('Données Google Drive illisibles');
+  return d;
+}
+
+function gdBackupLocal() { try { localStorage.setItem('emeraude-data-backup', localStorage.getItem('emeraude-data') || ''); } catch(e) {} }
+
+function gdApplyData(d, rev) {
+  replaceDataSnapshot(d);
+  recalculateDerivedData();
+  try { localStorage.setItem('emeraude-data', JSON.stringify(DATA)); } catch(e) {}
+  gdSetState({ rev, dirty: false, lastSync: new Date().toISOString() });
+  odRerender();
+}
+
+async function gdPut(expectedRev) {
+  if (DATA_TOO_NEW) throw new Error(TOO_NEW_MSG);
+  const rev = GD.rev;
+  const content = await EmeraudeCore.sealText(JSON.stringify(buildDataPayload()), GD.pass);
+  const j = await gdCall('put', { expectedRev, content });
+  if (j.conflict) return false;   // écrit ailleurs entre-temps
+  gdSetState({ rev: j.rev, dirty: GD.rev !== rev, lastSync: new Date().toISOString() });
+  gdArchive(content);
+  return true;
+}
+
+// Copie datée dans « emeraude › Archives », une par semaine (le relais ne la crée qu'une fois)
+function gdArchive(content) {
+  const week = EmeraudeCore.isoWeek(todayISO());
+  if (gdState().archive === week) return;
+  gdCall('archive', { name: `emeraude-archive-${week}.json`, content }).then(() => gdSetState({ archive: week })).catch(() => {});
+}
+
+async function gdResolveConflict() {
+  const g = await gdCall('get');
+  const d = await gdDecode(g.content);   // phrase de passe vérifiée avant tout choix
+  const takeRemote = confirm(
+    `Conflit de synchronisation Google Drive\n\n` +
+    `Les données ont été modifiées sur un autre appareil ET sur cet appareil depuis la dernière synchronisation.\n\n` +
+    `OK = garder la version Google Drive (la version de cet appareil est copiée dans « emeraude-data-backup » de ce navigateur)\n` +
+    `Annuler = envoyer la version de cet appareil (une copie hebdomadaire reste dans Google Drive › emeraude › Archives)`);
+  if (takeRemote) { gdBackupLocal(); gdApplyData(d, g.rev); }
+  else if (!await gdPut(g.rev)) throw new Error('Fichier Google Drive encore modifié pendant la résolution, réessayez.');
+}
+
+function gdUnlock() {
+  if (!GD.pass) GD.pass = gdStoredPass();
+  GD.needPass = !GD.pass;
+  return !GD.needPass;
+}
+
+async function gdSync() {
+  if (!gdConfigured() || !gdUnlock()) { gdPill(); return; }
+  if (GD.busy) { GD.again = true; return; }
+  GD.busy = true; gdPill();
+  try {
+    const st = gdState();
+    const meta = await gdCall('meta');
+    GD.relayVersion = meta.relayVersion;
+    const plan = EmeraudeCore.syncPlan(meta.rev, st.rev, !!st.dirty);
+    if (plan === 'push') {
+      if (!await gdPut(meta.rev)) await gdResolveConflict();
+    } else if (plan === 'pull') {
+      const g = await gdCall('get');
+      gdApplyData(await gdDecode(g.content), g.rev);
+    } else if (plan === 'conflict') {
+      await gdResolveConflict();
+    }
+    GD.lastError = '';
+  } catch(e) {
+    if (e.badPass) { GD.pass = ''; gdRememberPass('', false); GD.needPass = true; }
+    GD.lastError = e?.message || String(e);
+  } finally {
+    GD.busy = false; gdPill();
+    if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres();
+    if (GD.again) { GD.again = false; gdSync(); }
+  }
+}
+
+// Appelé par saveData() : marque les données locales comme à envoyer
+function gdMarkDirty() {
+  if (!SETTINGS.gdEnabled) return;
+  GD.rev++;
+  gdSetState({ dirty: true });
+  clearTimeout(GD.timer);
+  GD.timer = setTimeout(gdSync, 2500);
+  gdPill();
+}
+
+function gdPill() {
+  const el = document.getElementById('gd-pill'); if (!el) return;
+  if (!SETTINGS.gdEnabled) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const st = gdState();
+  let cls = 'ok', txt = 'Drive ✓', tip = 'Google Drive à jour' + (st.lastSync ? ' · ' + new Date(st.lastSync).toLocaleString('fr-FR') : '');
+  if (GD.busy)              { cls = 'busy'; txt = 'Drive …'; tip = 'Synchronisation en cours'; }
+  else if (GD.needPass)     { cls = 'err';  txt = 'Drive 🔒'; tip = (GD.lastError ? GD.lastError + ' — ' : '') + 'Saisir la phrase de passe (cliquer)'; }
+  else if (GD.lastError)    { cls = 'err';  txt = 'Drive !'; tip = GD.lastError; }
+  else if (st.dirty)        { cls = 'busy'; txt = 'Drive ↑'; tip = 'Modifications locales à envoyer'; }
+  el.className = 'sync-pill ' + cls; el.textContent = txt; el.title = tip;
+}
+function gdPillClick() { if (GD.needPass) gdEnterPass(); else gdSync(); }
+
+// Fenêtre de saisie de la phrase de passe (champ masqué, contrairement à prompt())
+function gdAskPass({ creating=false, title='', message='' }={}) {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:16px';
+    box.innerHTML = `<form style="width:100%;max-width:420px;padding:20px;border-radius:12px;background:var(--abyss);border:1px solid rgba(16,185,129,0.3);color:var(--text-2);font-size:0.8rem">
+      <div style="font-size:0.95rem;font-weight:700;color:var(--text-1);margin-bottom:8px">🔒 ${impEsc(title || (creating ? 'Choisir la phrase de passe' : 'Phrase de passe Google Drive'))}</div>
+      <div style="font-size:0.7rem;color:var(--text-4);margin-bottom:12px">${impEsc(message || (creating
+        ? 'Elle chiffre les données avant leur envoi sur Google Drive. Au moins 10 caractères. Notez-la en lieu sûr : sans elle, les données du Drive sont illisibles (les données de chaque appareil et vos exports JSON restent lisibles).'
+        : 'La phrase choisie lors de la connexion à Google Drive.'))}</div>
+      <input name="p1" type="password" class="form-input" autocomplete="${creating ? 'new-password' : 'current-password'}" placeholder="Phrase de passe" style="width:100%;margin-bottom:8px" />
+      ${creating ? '<input name="p2" type="password" class="form-input" autocomplete="new-password" placeholder="Confirmer la phrase de passe" style="width:100%;margin-bottom:8px" />' : ''}
+      <label style="display:flex;gap:8px;align-items:center;font-size:0.7rem;color:var(--text-3);margin:4px 0 12px"><input name="rem" type="checkbox" checked /> Mémoriser sur cet appareil</label>
+      <div data-err style="font-size:0.7rem;color:#FCA5A5;min-height:1em;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" data-cancel class="btn-topbar">Annuler</button>
+        <button type="submit" class="btn-topbar" style="color:var(--em-bright);border-color:rgba(16,185,129,0.45)">Valider</button>
+      </div></form>`;
+    const form = box.querySelector('form'), err = box.querySelector('[data-err]');
+    const done = v => { box.remove(); resolve(v); };
+    box.querySelector('[data-cancel]').onclick = () => done(null);
+    form.onsubmit = ev => {
+      ev.preventDefault();
+      const p1 = form.p1.value;
+      if (creating && p1.length < 10) { err.textContent = 'Au moins 10 caractères.'; return; }
+      if (creating && p1 !== form.p2.value) { err.textContent = 'Les deux saisies sont différentes.'; return; }
+      if (!p1) { err.textContent = 'Phrase de passe vide.'; return; }
+      done({ pass: p1, remember: form.rem.checked });
+    };
+    document.body.appendChild(box);
+    form.p1.focus();
+  });
+}
+
+async function gdEnterPass() {
+  const p = await gdAskPass();
+  if (!p) return;
+  GD.pass = p.pass; gdRememberPass(p.pass, p.remember);
+  GD.needPass = false; GD.lastError = '';
+  gdSync();
+}
+
+// Google Drive devient la seule source de vérité : OneDrive et fichier local désactivés sur cet appareil
+function gdStopOtherSyncs() {
+  const stopped = [];
+  if (SETTINGS.odEnabled) {
+    odWriteLS('emeraude-od-auth', {}); odWriteLS('emeraude-od-sync', {});
+    SETTINGS.odEnabled = false; OD.needLogin = false; OD.lastError = '';
+    stopped.push('OneDrive');
+  }
+  if (SETTINGS.jsonFileAutoSync || JSON_SYNC.handle) {
+    JSON_SYNC.handle = null; JSON_SYNC.needPermission = false; JSON_SYNC.lastError = '';
+    fsSaveHandle(null); odWriteLS('emeraude-fs-sync', {});
+    SETTINGS.jsonFileAutoSync = false;
+    stopped.push('fichier de données local');
+  }
+  saveSettings(); odPill(); fsPill();
+  return stopped;
+}
+
+async function gdConnect(text) {
+  const link = EmeraudeCore.parseDriveLink(text);
+  if (!link) { alert('Lien de connexion non reconnu : il doit contenir « #/drive?r=https://script.google.com/macros/s/…/exec&t=… » (journal de installer() dans le script du relais).'); return; }
+  if (link.dev) {
+    const u = (prompt('Ce lien contient l’adresse de TEST du relais (elle se termine par /dev) : elle ne fonctionne que dans l’éditeur de script.\n\n' +
+      'Dans script.google.com : Déployer › Gérer les déploiements › « Application Web » › copiez l’URL qui se termine par /exec et collez-la ici :') || '').trim();
+    const k = EmeraudeCore.parseDriveLink('#/drive?r=' + encodeURIComponent(u) + '&t=' + link.token);
+    if (!k || k.dev) { if (u) alert('Adresse refusée : elle doit commencer par https://script.google.com/macros/s/ et se terminer par /exec.'); return; }
+    link.url = k.url;
+  }
+  const auth = { url: link.url, token: link.token };
+  let meta, remote = null;
+  try { meta = await gdCall('meta', {}, auth); }
+  catch(e) { alert('Connexion à Google Drive impossible : ' + e.message); return; }
+  const p = await gdAskPass({ creating: !meta.rev });
+  if (!p) return;
+  if (meta.rev) {
+    try { const g = await gdCall('get', {}, auth); remote = { d: await gdDecode(g.content, p.pass), rev: g.rev }; }
+    catch(e) { alert(e.message); return; }
+  }
+  odWriteLS('emeraude-gd-auth', auth);
+  GD.pass = p.pass; gdRememberPass(p.pass, p.remember);
+  GD.needPass = false; GD.lastError = ''; GD.relayVersion = meta.relayVersion;
+  SETTINGS.gdEnabled = true;
+  const stopped = gdStopOtherSyncs();
+  if (remote && confirm('Le Google Drive contient déjà des données Émeraude.\n\n' +
+      'OK = les charger sur cet appareil (les données actuelles de cet appareil sont copiées dans « emeraude-data-backup »)\n' +
+      'Annuler = les remplacer par les données de cet appareil')) {
+    gdBackupLocal(); gdApplyData(remote.d, remote.rev);
+  } else {
+    gdSetState({ rev: remote ? remote.rev : 0, dirty: true });
+  }
+  gdStart();
+  await gdSync();
+  if (stopped.length) alert(`Google Drive connecté. Synchronisation désactivée sur cet appareil : ${stopped.join(', ')} (Google Drive fait désormais foi).`);
+  if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres') renderParametres();
+}
+
+// Nouvelle phrase de passe, ou phrase oubliée : le Drive est réécrit avec les données de cet appareil
+async function gdReplaceRemote() {
+  if (!gdConfigured()) return;
+  if (!confirm('Remplacer les données Google Drive par celles de cet appareil, chiffrées avec une NOUVELLE phrase de passe ?\n\n' +
+    'Les autres appareils demanderont la nouvelle phrase ; leurs modifications non synchronisées seront à arbitrer.')) return;
+  const p = await gdAskPass({ creating: true, title: 'Nouvelle phrase de passe' });
+  if (!p) return;
+  let meta;
+  try { meta = await gdCall('meta'); } catch(e) { alert(e.message); return; }
+  GD.pass = p.pass; gdRememberPass(p.pass, p.remember);
+  GD.needPass = false; GD.lastError = '';
+  gdSetState({ rev: meta.rev, dirty: true, archive: '' });
+  await gdSync();
+}
+
+function gdForgetPass() {
+  gdRememberPass('', false);
+  GD.pass = ''; GD.needPass = SETTINGS.gdEnabled;
+  gdPill(); renderParametres();
+}
+
+function gdDisconnect() {
+  if (!confirm('Déconnecter Google Drive sur cet appareil ? Les données restent dans ce navigateur et sur Google Drive.')) return;
+  odWriteLS('emeraude-gd-auth', {}); odWriteLS('emeraude-gd-sync', {}); gdRememberPass('', false);
+  SETTINGS.gdEnabled = false; saveSettings();
+  Object.assign(GD, { pass: '', needPass: false, lastError: '', relayVersion: null });
+  gdPill(); renderParametres();
+}
+
+function gdSettingsCard(btnPri, btnSec) {
+  const st = gdState(), a = gdAuth(), on = gdConfigured();
+  const status = !on ? 'Non connecté'
+    : GD.needPass ? 'Phrase de passe à saisir' + (GD.lastError ? ' · ' + GD.lastError : '')
+    : GD.lastError ? 'Erreur : ' + GD.lastError
+    : 'Connecté' + (st.lastSync ? ' · dernière synchro ' + new Date(st.lastSync).toLocaleString('fr-FR') : '') + (st.dirty ? ' · modifications en attente' : '');
+  const old = on && GD.relayVersion != null && GD.relayVersion < GD_RELAY_EXPECTED;
+  return `<div class="c3w" style="margin-bottom:20px"><div class="c3" style="padding:16px"><div class="shine"></div>
+    <div style="font-size:0.75rem;font-weight:600;color:var(--text-1);margin-bottom:6px">🔒 Synchronisation Google Drive (PC + smartphone)</div>
+    <div style="font-size:0.65rem;color:var(--text-4);margin-bottom:10px">Les données sont enregistrées <strong>chiffrées</strong> dans <code style="color:var(--em-pale)">Google Drive › emeraude › emeraude_data.json</code> par votre relais personnel, et partagées entre tous vos appareils connectés — y compris le fichier HTML ouvert directement sur le PC. La phrase de passe ne quitte jamais l'appareil. Installation du relais : <code style="color:var(--em-pale)">relais/LISEZ-MOI.txt</code>.</div>
+    <div style="font-size:0.65rem;color:${on && !GD.lastError && !GD.needPass ? 'var(--em-bright)' : 'var(--text-4)'};margin-bottom:12px">${impEsc(status)}</div>
+    ${old ? `<div style="font-size:0.65rem;color:#FCD34D;margin-bottom:10px">Relais en version ${GD.relayVersion} : version ${GD_RELAY_EXPECTED} attendue — redéployez-le (relais/deployer-relais.ps1).</div>` : ''}
+    ${on ? `<div style="font-size:0.62rem;color:var(--text-4);margin-bottom:10px;word-break:break-all">Relais : ${impEsc(a.url)}${GD.relayVersion != null ? ' · version ' + GD.relayVersion : ''}</div>` : `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <input id="gd-link" class="form-input" type="password" autocomplete="off" style="flex:1;min-width:220px;font-family:monospace;font-size:0.72rem" placeholder="Coller le lien de connexion (…#/drive?r=…&t=…)" />
+      <button onclick="gdConnect(document.getElementById('gd-link').value)" style="${btnPri};padding:8px 14px;font-size:0.75rem">Connecter Google Drive</button>
+    </div>`}
+    ${on ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="${GD.needPass ? 'gdEnterPass()' : 'gdSync()'}" style="${btnPri};padding:8px 14px;font-size:0.75rem">${GD.needPass ? 'Saisir la phrase de passe' : 'Synchroniser maintenant'}</button>
+      <button onclick="gdForgetPass()" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${gdStoredPass() ? '' : 'disabled'}>Oublier la phrase sur cet appareil</button>
+      <button onclick="gdReplaceRemote()" style="${btnSec};padding:8px 14px;font-size:0.75rem">Changer la phrase de passe…</button>
+      <button onclick="gdDisconnect()" style="${btnSec};padding:8px 14px;font-size:0.75rem">Déconnecter</button>
+    </div>` : ''}
+  </div></div>`;
+}
+
+function gdStart() {
+  if (GD.started) return;
+  GD.started = true;
+  window.addEventListener('online', () => gdSync());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') gdSync(); });
+  setInterval(() => { if (document.visibilityState === 'visible') gdSync(); }, 2 * 60 * 1000);   // quotas Apps Script
+}
+
+// Lien de connexion ouvert (au démarrage ou dans l'appli déjà ouverte) : le code secret est
+// retiré de la barre d'adresse avant toute autre chose
+async function gdFromHash() {
+  const h = String(location.hash);
+  if (!h.startsWith('#/drive')) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  await gdConnect(h);
+}
+
+async function gdInit() {
+  window.addEventListener('hashchange', gdFromHash);
+  await gdFromHash();
+  gdPill();
+  if (!gdConfigured()) return;
+  gdStart();
+  gdSync();
 }
 
 // ......................................
@@ -8734,6 +9406,7 @@ function renderParametres() {
     ${tabBtn('cours','Cours des actifs','📈')}
     ${tabBtn('graphiques','Graphiques','📊')}
     ${tabBtn('dashboard','Tableau de bord','🧭')}
+    ${tabBtn('version','Mises à jour','🔄')}
   </div>`;
 
   // ── SAUVEGARDE ──
@@ -8789,6 +9462,7 @@ function renderParametres() {
         </div></div>
       </div>
     </div>
+    ${gdSettingsCard(btnPri, btnSec)}
     ${odSettingsCard(btnPri, btnSec)}
     ${tog('autoSaveEnabled','Sauvegarde automatique','Enregistre toute modification dans le navigateur')}
     ${tog('jsonFileAutoSync','Auto-sync vers JSON','Ecrit aussi chaque modification dans le fichier JSON connecte durant la session')}
@@ -8891,15 +9565,16 @@ function renderParametres() {
     ${tog('dashShowEvolution','Graphique d\'évolution','Courbe sur 12 mois')}
     ${tog('dashShowDonut','Graphique de répartition','Donut de répartition par classe d\'actifs')}
     ${tog('dashShowTransactions','Transactions récentes','Tableau des dernières opérations')}
-    <div style="margin-top:18px;padding:14px;border-radius:10px;background:rgba(16,185,129,0.04);border:1px solid rgba(16,185,129,0.1)"><div style="font-size:0.72rem;color:var(--text-4)">" Les modifications s'appliquent après rechargement du tableau de bord.</div></div>`;
+    <div style="margin-top:18px;padding:14px;border-radius:10px;background:rgba(16,185,129,0.04);border:1px solid rgba(16,185,129,0.1)"><div style="font-size:0.72rem;color:var(--text-4)">ℹ Les modifications s'appliquent après rechargement du tableau de bord.</div></div>`;
 
-  const contentMap = { sauvegarde:tabSauvegarde, interface:tabInterface, comptes:tabComptes, cours:tabCours, graphiques:tabGraphiques, dashboard:tabDashboard };
+  const contentMap = { sauvegarde:tabSauvegarde, interface:tabInterface, comptes:tabComptes, cours:tabCours, graphiques:tabGraphiques, dashboard:tabDashboard,
+    version: updSettingsTab(sHd, tog, btnPri, btnSec) };
 
   root.innerHTML = `<div style="padding:22px 28px 40px">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
       <div style="font-size:1.8rem;opacity:0.5">⚙</div>
       <div><div style="font-size:1.4rem;font-weight:700;color:var(--text-1)">Paramètres</div>
-        <div style="font-size:0.7rem;color:var(--text-4)">Version 2.3 · Émeraude Patrimoine Maritime</div></div>
+        <div style="font-size:0.7rem;color:var(--text-4)">Version ${APP_VERSION} · Émeraude Patrimoine Maritime</div></div>
     </div>
     <div class="c3w"><div class="c3" style="padding:24px 28px"><div class="shine"></div>
       ${tabs}
@@ -9015,13 +9690,120 @@ async function fetchFinancialNews() {
   _newsBusy = false;
 }
 
+// ......................................
+// VERSION ET MISES À JOUR (même principe que Seaway)
+// ......................................
+// publier.ps1 inscrit dans la copie publiée APP_BUILD = « aaaammjj-hhmm-commit » et écrit version.json
+// sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
+// fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
+// Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
+const APP_BUILD = '20261111-1656-e44fb96';
+const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
+const IS_HOSTED = /^https?:$/.test(location.protocol);
+const UPD = { res: null, later: false, last: 0, busy: false };
+const UPD_INTERVAL = 30 * 60 * 1000;
+
+async function updCheck(manual) {
+  if (UPD.busy) return UPD.res;
+  if (!navigator.onLine) { UPD.res = { error: 'hors ligne' }; updRender(); return UPD.res; }
+  UPD.busy = true;
+  // Copie publiée : son propre site ; fichier local ou serveur de test : le site public
+  const stamped = !!EmeraudeCore.buildInfo(APP_BUILD);
+  const url = (IS_HOSTED && stamped ? new URL('version.json', location.href.split('#')[0]).href : APP_PUBLIC_URL + 'version.json') + '?t=' + Date.now();
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    UPD.res = EmeraudeCore.updateStatus({ build: APP_BUILD, version: APP_VERSION }, await r.json());
+    UPD.res.checkedAt = new Date();
+  } catch (e) {
+    UPD.res = { error: 'version en ligne illisible (' + (e?.message || e) + ')' };
+  } finally { UPD.busy = false; }
+  if (manual) UPD.later = false;
+  updRender();
+  return UPD.res;
+}
+function updAuto() {
+  if (Date.now() - UPD.last < UPD_INTERVAL / 2) return;
+  UPD.last = Date.now();
+  updCheck(false);
+}
+async function updApply() {
+  if (!IS_HOSTED || !EmeraudeCore.buildInfo(APP_BUILD)) { window.open(APP_PUBLIC_URL, '_blank', 'noopener'); return; }
+  if ((IMMOB_UI.draft || IMP.cur) && !confirm('Une saisie est en cours (fiche immobilière ou import) : elle sera perdue. Mettre à jour maintenant ?')) return;
+  // Les données sont déjà enregistrées dans ce navigateur ; les envois en attente reprennent après le rechargement
+  const reg = navigator.serviceWorker ? await navigator.serviceWorker.getRegistration().catch(() => null) : null;
+  if (reg) { try { await reg.update(); } catch (e) {} }
+  location.reload();
+}
+function updLater() { UPD.later = true; updRender(); }
+
+function updRender() {
+  const r = UPD.res;
+  const show = !!(r && r.newer && !UPD.later && SETTINGS.notifMaj !== false);
+  const local = !IS_HOSTED || !EmeraudeCore.buildInfo(APP_BUILD);
+  const el = document.getElementById('maj-banner');
+  if (el) {
+    el.style.display = show ? '' : 'none';
+    if (show) el.innerHTML = `<div class="maj-banner" role="status">
+      <span style="font-size:1.1rem">🔔</span>
+      <div style="flex:1;min-width:200px">Nouvelle version d’Émeraude disponible : <strong>v${impEsc(r.version || '?')}</strong>${r.theirs ? ` du ${impEsc(r.theirs.label)}` : ''}.
+        ${local ? `Ce fichier local est en v${impEsc(APP_VERSION)}.` : 'Vos données ne sont pas touchées par la mise à jour.'}</div>
+      <button class="btn btn-em" style="padding:6px 14px" onclick="updApply()">${local ? 'Ouvrir la version en ligne' : 'Mettre à jour'}</button>
+      <button class="btn btn-ghost" style="padding:6px 14px" onclick="updLater()">Plus tard</button></div>`;
+  }
+  // Pastille sur « Paramètres » tant qu'une mise à jour attend
+  const nav = document.querySelector('.nav-item[data-page="parametres"]');
+  if (nav) {
+    let dot = nav.querySelector('.maj-dot');
+    if (r && r.newer && SETTINGS.notifMaj !== false) { if (!dot) { dot = document.createElement('span'); dot.className = 'maj-dot'; dot.title = 'Mise à jour disponible'; nav.appendChild(dot); } }
+    else if (dot) dot.remove();
+  }
+  if (document.querySelector('.nav-item.active')?.dataset.page === 'parametres' && PARAM_UI.tab === 'version') renderParametres();
+}
+
+function updSettingsTab(sHd, tog, btnPri, btnSec) {
+  const b = EmeraudeCore.buildInfo(APP_BUILD);
+  const r = UPD.res;
+  const ici = b ? `Version <strong>v${impEsc(APP_VERSION)}</strong> publiée le ${impEsc(b.label)} (${impEsc(b.sha)})${matchMedia('(display-mode: standalone)').matches ? ' · application installée' : ' · ouverte dans le navigateur'}`
+    : `Version <strong>v${impEsc(APP_VERSION)}</strong> · fichier local${document.lastModified ? ` modifié le ${impEsc(new Date(document.lastModified).toLocaleString('fr-FR'))}` : ''} (copie de travail)`;
+  let statut = '';
+  if (UPD.busy) statut = 'Recherche en cours…';
+  else if (r && r.error) statut = `<span style="color:#FCA5A5">Impossible de vérifier : ${impEsc(r.error)}.</span>`;
+  else if (r && r.newer) statut = `<span style="color:var(--gold-base)">Nouvelle version disponible : v${impEsc(r.version || '?')}${r.theirs ? ` du ${impEsc(r.theirs.label)}` : ''}.</span>
+      <button onclick="updApply()" style="${btnPri};padding:6px 14px;font-size:0.75rem;margin-left:8px">${b && IS_HOSTED ? 'Mettre à jour' : 'Ouvrir la version en ligne'}</button>`;
+  else if (r) statut = `<span style="color:var(--em-bright)">✓ À jour</span>${r.theirs ? ` (version en ligne : v${impEsc(r.version || '?')} du ${impEsc(r.theirs.label)})` : ''}.`;
+  return `${sHd('🔄', 'Version et mises à jour', 'Être prévenu quand une nouvelle version est publiée')}
+    <div class="c3w" style="margin-bottom:14px"><div class="c3" style="padding:16px"><div class="shine"></div>
+      <div style="font-size:0.8rem;color:var(--text-2);margin-bottom:8px">${ici}</div>
+      <div style="font-size:0.68rem;color:var(--text-4);margin-bottom:12px">${b && IS_HOSTED
+        ? 'L’application vérifie seule la version en ligne à l’ouverture, toutes les 30 minutes et quand vous revenez dessus. Si la version ne change pas après la mise à jour : fermez complètement l’application et rouvrez-la.'
+        : `Ce fichier est comparé au numéro de version publié sur ${impEsc(APP_PUBLIC_URL)}. Les données ne sont pas dans le fichier du logiciel.`}</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button onclick="updCheck(true)" style="${btnSec};padding:8px 14px;font-size:0.75rem" ${UPD.busy ? 'disabled' : ''}>Rechercher une mise à jour</button>
+        <div style="font-size:0.75rem;color:var(--text-3)">${statut}</div>
+      </div>
+    </div></div>
+    ${tog('notifMaj', 'Me prévenir des nouvelles versions', 'Bandeau en haut de l’écran et pastille sur « Paramètres »')}`;
+}
+
+function updInit() {
+  document.querySelectorAll('.app-version').forEach(e => { e.textContent = 'v' + APP_VERSION; });
+  setTimeout(updAuto, 8000);
+  setInterval(updAuto, UPD_INTERVAL);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') updAuto(); });
+  window.addEventListener('online', () => { UPD.last = 0; updAuto(); });
+}
+
 // Lancer l'actu au démarrage et auto-refresh toutes les 5 min
 setTimeout(fetchFinancialNews, 2000);
 setInterval(fetchFinancialNews, 5 * 60 * 1000);
 
-// Synchronisation : fichier local (PC, dossier OneDrive) et/ou OneDrive via Graph (appli hébergée)
+// Synchronisation : Google Drive (relais) ; sinon fichier local (PC) et/ou OneDrive via Graph
 fsInit();
 odInit();
+gdInit();
+ptfAutoRefresh();
+updInit();
 if ('serviceWorker' in navigator && odSecureContext()) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

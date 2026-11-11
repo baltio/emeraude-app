@@ -1,7 +1,7 @@
 // Service worker Émeraude : rend l'application installable et utilisable hors ligne.
 // Ne met en cache QUE les fichiers de l'application (même origine).
 // Les données (OneDrive / Microsoft Graph) et les cours en ligne ne passent jamais par le cache.
-const CACHE = 'emeraude-a497e1a';
+const CACHE = 'emeraude-e44fb96';
 const SHELL = [
   './',
   './emeraude_maritime.html',
