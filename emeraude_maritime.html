@@ -3909,7 +3909,9 @@ const EmeraudeCore = (() => {
 
   IMPORTERS.push({
     id: 'emeraude-json', label: 'Fichier de données Émeraude (JSON) — fusion', kind: 'json',
-    detect: f => f.json && typeof f.json === 'object' && !Array.isArray(f.json) && ['banks', 'portefeuille', 'cryptoWallets', 'revenus'].some(k => k in f.json) ? 0.99 : 0,
+    detect: f => f.json && typeof f.json === 'object' && !Array.isArray(f.json) && (['banks', 'portefeuille', 'cryptoWallets', 'revenus'].some(k => k in f.json)
+      // fichier partiel (ex. fiches immobilières seules) : reconnu s'il porte la version du format Émeraude
+      || ('schemaVersion' in f.json && ['immobilierBiens', 'prets', 'budget'].some(k => k in f.json))) ? 0.99 : 0,
     parse: f => [{ kind: 'json', data: f.json }]
   });
 
@@ -4435,6 +4437,76 @@ const EmeraudeCore = (() => {
     }
     return Math.pow(1 + (lo + hi) / 2, 12) - 1;
   }
+  // ── VEFA : appels de fonds (immobilier + mobilier), TVA payée / restante / récupérée, frais provisionnés ──
+  // bien.vefa = { tauxTVA, immoTTC, mobilierTTC, appels:[{id, stade, pct, paye, date}],
+  //   mobilierAppels:[{id, stade, pct, paye, date, avec}] (avec = appel immobilier du même stade),
+  //   frais:[{id, libelle, provision, definitif}], tvaRecuperee:[{id, date, montant}],
+  //   residence, adresse, lot, batiment, etage, tantiemes, tantiemesBase, pieces:[texte] }
+  // Les montants viennent des actes (saisie) ; rien n'est déduit du droit fiscal (récupération de TVA à confirmer).
+  const VEFA_ECHEANCIER_TYPE = [[30, 'Ouverture du chantier — terrassement achevé'], [5, 'Achèvement des fondations'],
+    [30, 'Achèvement du plancher bas du rez-de-chaussée'], [5, 'Stade « Hors d’eau »'], [15, 'Stade « Hors d’air »'],
+    [5, 'Achèvement des cloisons'], [5, 'Achèvement des locaux'], [5, 'Livraison des locaux']];
+  function vefaNouveau() {
+    return { tauxTVA: 20, immoTTC: 0, mobilierTTC: 0, residence: '', adresse: '', lot: '', batiment: '', etage: '', tantiemes: 0, tantiemesBase: 10000,
+      appels: VEFA_ECHEANCIER_TYPE.map(([pct, stade], i) => ({ id: 'E' + (i + 1), stade, pct, paye: false, date: '' })),
+      mobilierAppels: [{ id: 'M1', stade: 'À l’acte', pct: 50, paye: false, date: '', avec: 'E1' }, { id: 'M2', stade: 'Stade « Hors d’air »', pct: 50, paye: false, date: '', avec: 'E5' }],
+      frais: [], tvaRecuperee: [], pieces: [] };
+  }
+  const htDeTTC = (ttc, taux) => round2(ttc / (1 + taux / 100));
+  function vefaPlan(v) {
+    const taux = v.tauxTVA == null || v.tauxTVA === '' ? 20 : +v.tauxTVA;
+    const ligne = (type, base, x) => {
+      const ttc = round2(base * (+x.pct || 0) / 100), ht = htDeTTC(ttc, taux);
+      return { type, id: x.id, stade: x.stade || '', pct: +x.pct || 0, ttc, ht, tva: round2(ttc - ht), paye: !!x.paye, date: toISO(x.date) || null, avec: x.avec || null };
+    };
+    return (v.appels || []).map(x => ligne('immo', +v.immoTTC || 0, x)).concat((v.mobilierAppels || []).map(x => ligne('mobilier', +v.mobilierTTC || 0, x)));
+  }
+  // opts = { surface, relais (capital des prêts relais TVA) }
+  function vefaSynthese(v, opts) {
+    opts = opts || {};
+    const taux = v.tauxTVA == null || v.tauxTVA === '' ? 20 : +v.tauxTVA;
+    const plan = vefaPlan(v);
+    const sum = (f, k) => round2(plan.filter(f).reduce((s, l) => s + l[k], 0));
+    const part = ttc => { const ht = htDeTTC(+ttc || 0, taux); return { ttc: round2(+ttc || 0), ht, tva: round2((+ttc || 0) - ht) }; };
+    const immo = part(v.immoTTC), mobilier = part(v.mobilierTTC);
+    const frais = (v.frais || []).map(f => {
+      const regle = f.definitif !== '' && f.definitif != null && isFinite(+f.definitif);
+      return { id: f.id, libelle: f.libelle || 'Frais', provision: round2(+f.provision || 0), definitif: regle ? round2(+f.definitif) : null,
+        retenu: regle ? round2(+f.definitif) : round2(+f.provision || 0) };
+    });
+    const fraisTotal = round2(frais.reduce((s, f) => s + f.retenu, 0));
+    const tvaRecuperee = round2((v.tvaRecuperee || []).reduce((s, r) => s + (+r.montant || 0), 0));
+    const prixTTC = round2(immo.ttc + mobilier.ttc), tvaTotale = round2(immo.tva + mobilier.tva);
+    const payeTTC = sum(l => l.paye, 'ttc'), tvaPayee = sum(l => l.paye, 'tva');
+    const datesPayees = plan.filter(l => l.paye && l.date).map(l => l.date).sort();
+    const premiere = datesPayees[0] || null;
+    // Chaque appel immobilier regroupe les appels mobilier du même stade (avec) ; cumul pour le graphique
+    let cumul = 0;
+    const immoIds = new Set(plan.filter(l => l.type === 'immo').map(l => l.id));
+    const stades = plan.filter(l => l.type === 'immo').map(l => {
+      const lies = plan.filter(m => m.type === 'mobilier' && m.avec === l.id);
+      const ttc = round2(l.ttc + lies.reduce((s, m) => s + m.ttc, 0));
+      cumul = round2(cumul + ttc);
+      return { id: l.id, stade: l.stade, pct: l.pct, ttc, cumul, paye: l.paye && lies.every(m => m.paye), date: l.date, mobilier: lies };
+    });
+    const orphelins = plan.filter(m => m.type === 'mobilier' && !immoIds.has(m.avec));
+    orphelins.forEach(m => { cumul = round2(cumul + m.ttc); stades.push({ id: m.id, stade: m.stade, pct: m.pct, ttc: m.ttc, cumul, paye: m.paye, date: m.date, mobilier: [] }); });
+    const pctImmo = round2((v.appels || []).reduce((s, x) => s + (+x.pct || 0), 0));
+    const pctMob = round2((v.mobilierAppels || []).reduce((s, x) => s + (+x.pct || 0), 0));
+    const surface = +opts.surface || 0;
+    const relais = round2(+opts.relais || 0);
+    return { taux, plan, stades, immo, mobilier, prixTTC, prixHT: round2(immo.ht + mobilier.ht), tvaTotale,
+      payeTTC, resteTTC: round2(prixTTC - payeTTC), payeHT: sum(l => l.paye, 'ht'), resteImmoTTC: sum(l => l.type === 'immo' && !l.paye, 'ttc'),
+      resteMobilierTTC: sum(l => l.type === 'mobilier' && !l.paye, 'ttc'), pctPaye: prixTTC ? payeTTC / prixTTC : 0,
+      tvaPayee, tvaRestante: round2(tvaTotale - tvaPayee), tvaRecuperee, tvaARecuperer: round2(Math.max(0, tvaPayee - tvaRecuperee)),
+      relais, tvaAFinancer: round2(Math.max(0, tvaTotale - tvaRecuperee - relais)),
+      frais, fraisTotal, fraisProvisoires: frais.some(f => f.definitif == null),
+      regularisation: round2(frais.filter(f => f.definitif != null).reduce((s, f) => s + f.definitif - f.provision, 0)),
+      decaissementInitial: round2(sum(l => l.paye && l.date === premiere, 'ttc') + fraisTotal), premierPaiement: premiere,
+      coutRevientHT: round2(immo.ht + mobilier.ht + fraisTotal),
+      prixM2HT: surface ? round2(immo.ht / surface) : null, prixM2TTC: surface ? round2(immo.ttc / surface) : null,
+      ecartPct: pctImmo !== 100 || (mobilier.ttc > 0 && pctMob !== 100) ? { immo: pctImmo, mobilier: pctMob } : null };
+  }
   const IMMO_REGIMES = {
     'lmnp-micro': { label: 'LMNP micro-BIC (abattement 50 %)', abattement: 0.5 },
     'lmnp-reel': { label: 'LMNP au réel (amortissements)', manuel: true },
@@ -4448,13 +4520,17 @@ const EmeraudeCore = (() => {
   // ctx = { prets, accounts:[{id, nom, txns}], today, tmi }
   function immoAnalyse(bien, ctx) {
     const today = ctx.today;
-    const prix = +bien.prixAchat || 0;
-    const frais = { notaire: +bien.fraisNotaire || 0, agence: +bien.fraisAgence || 0, travaux: +bien.travaux || 0, mobilier: +bien.mobilier || 0, autres: +bien.autresFrais || 0 };
-    const coutTotal = round2(prix + Object.values(frais).reduce((s, v) => s + v, 0));
     const tvaInfo = bien.tva || {};
     // Prêt relais TVA : son capital est remboursé par l'État (remboursement de TVA), pas par les loyers
     const loans = (ctx.prets || []).filter(p => (bien.pretIds || []).includes(p.id))
       .map(p => Object.assign({ pret: p, tva: p.usage === 'tva' || tvaInfo.pretId === p.id }, loanAt(p, today)));
+    // VEFA suivie : prix et mobilier HT (TVA récupérée), frais retenus (définitifs sinon provisions) viennent du suivi
+    const vs = bien.vefa ? vefaSynthese(bien.vefa, { surface: +bien.surface || 0,
+      relais: loans.filter(l => l.tva).reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0) }) : null;
+    const prix = vs ? vs.immo.ht : +bien.prixAchat || 0;
+    const frais = { notaire: vs ? vs.fraisTotal : +bien.fraisNotaire || 0, agence: +bien.fraisAgence || 0, travaux: +bien.travaux || 0,
+      mobilier: vs ? vs.mobilier.ht : +bien.mobilier || 0, autres: +bien.autresFrais || 0 };
+    const coutTotal = round2(prix + Object.values(frais).reduce((s, v) => s + v, 0));
     const emprunte = round2(loans.filter(l => !l.tva).reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0));
     const crd = round2(loans.reduce((s, l) => s + l.crd, 0));
     const crdTva = round2(loans.filter(l => l.tva).reduce((s, l) => s + l.crd, 0));
@@ -4464,12 +4540,15 @@ const EmeraudeCore = (() => {
     // Sans coût d'acquisition saisi, l'apport n'a pas de sens (il serait négatif)
     const apport = coutTotal > 0 ? round2(coutTotal - emprunte) : 0;
     // TVA de l'achat (VEFA) : avancée par prêt relais ou en fonds propres, puis remboursée par l'État
-    const tvaMontant = round2(+tvaInfo.montant || 0);
-    const tvaRembourseeLe = toISO(tvaInfo.rembourseeLe);
-    const tvaARecuperer = tvaRembourseeLe && tvaRembourseeLe <= today ? 0 : tvaMontant;
-    const tvaFondsPropres = tvaInfo.financement === 'fondsPropres' ? tvaMontant : 0;
+    // En VEFA suivie : TVA à récupérer = TVA déjà payée dans les appels − TVA remboursée par l'État
+    const tvaMontant = vs ? vs.tvaTotale : round2(+tvaInfo.montant || 0);
+    const tvaRembourseeLe = vs ? ((bien.vefa.tvaRecuperee || []).map(r => toISO(r.date)).filter(Boolean).sort().pop() || null) : toISO(tvaInfo.rembourseeLe);
+    const tvaARecuperer = vs ? vs.tvaARecuperer : tvaRembourseeLe && tvaRembourseeLe <= today ? 0 : tvaMontant;
+    const tvaFondsPropres = tvaInfo.financement === 'fondsPropres' ? (vs ? vs.tvaPayee : tvaMontant) : 0;
     const tva = { montant: tvaMontant, financement: tvaInfo.financement || '', aRecuperer: tvaARecuperer, fondsPropres: tvaFondsPropres,
-      rembourseeLe: tvaRembourseeLe, aReinvestir: tvaFondsPropres && !tvaARecuperer ? tvaFondsPropres : 0, detteRelais: crdTva };
+      rembourseeLe: tvaRembourseeLe, detteRelais: crdTva,
+      aReinvestir: vs ? (tvaInfo.financement === 'fondsPropres' ? vs.tvaRecuperee : 0) : tvaFondsPropres && !tvaARecuperer ? tvaFondsPropres : 0,
+      payee: vs ? vs.tvaPayee : 0, restante: vs ? vs.tvaRestante : 0, recuperee: vs ? vs.tvaRecuperee : 0, aFinancer: vs ? vs.tvaAFinancer : 0 };
     const vacance = Math.min(12, Math.max(0, +bien.vacanceMois || 0));
     const revenusTheo = round2((bien.revenus || []).reduce((s, l) => s + annualize(l), 0));
     const revenus = round2(revenusTheo * (12 - vacance) / 12);
@@ -4478,12 +4557,14 @@ const EmeraudeCore = (() => {
     const tmi = +ctx.tmi || 0;
     const impot = round2(!reg || reg.manuel ? (+bien.impotAnnuel || 0) : reg.aucun ? 0 : revenus * (1 - reg.abattement) * (tmi + PRELEVEMENTS_SOCIAUX) / 100);
     const cashflow = round2(revenus - charges - impot - credit.total);
-    const valeur = +bien.valeurActuelle || coutTotal;
+    // VEFA en cours : valeur par défaut = part HT déjà payée (le reste n'est ni payé ni emprunté)
+    const valeur = +bien.valeurActuelle || (vs ? vs.payeHT : coutTotal);
+    const vefaEnCours = !!(vs && vs.resteTTC > 0.005);
     const ratio = x => coutTotal > 0 ? x / coutTotal : null;
     // Flux mensuels depuis l'achat pour le TRI : −apport, puis loyers − charges − impôt − échéances, et à la fin valeur − capital restant dû
     const start = toISO(bien.dateAchat);
     let flows = null, tri = null;
-    if (start && start < today && coutTotal > 0) {
+    if (start && start < today && coutTotal > 0 && !vefaEnCours) {
       const n = Math.max(1, monthsBetween(start, today));
       const net = (revenus - charges - impot) / 12;
       flows = new Array(n + 1).fill(0);
@@ -4514,7 +4595,7 @@ const EmeraudeCore = (() => {
       apport, patrimoineNet: round2(valeur - crd + tvaARecuperer), revenusTheo, revenus, charges, impot, impotAuto: !!(reg && !reg.manuel), credit, cashflow,
       cashflowMensuel: round2(cashflow / 12), enrichissement: round2(cashflow + credit.capital),
       rendBrut: ratio(revenusTheo), rendNet: ratio(revenus - charges), rendNetNet: ratio(revenus - charges - impot),
-      rendApport: apport > 0 ? (cashflow + credit.capital) / apport : null, tri, flows, start, reel };
+      rendApport: apport > 0 ? (cashflow + credit.capital) / apport : null, tri, flows, start, reel, vefa: vs, vefaEnCours };
   }
   // Vue d'ensemble : sommes, rendements globaux et TRI global (flux de tous les biens sur une même frise)
   function immoGlobal(biens, ctx) {
@@ -4523,7 +4604,8 @@ const EmeraudeCore = (() => {
     const t = { coutTotal: sum('coutTotal'), valeur: sum('valeur'), crd: sum('crd'), apport: sum('apport'), patrimoineNet: sum('patrimoineNet'),
       revenusTheo: sum('revenusTheo'), revenus: sum('revenus'), charges: sum('charges'), impot: sum('impot'), cashflow: sum('cashflow'),
       plusValue: sum('plusValue'), emprunte: sum('emprunte'),
-      tva: ['montant', 'aRecuperer', 'fondsPropres', 'aReinvestir', 'detteRelais'].reduce((o, f) => (o[f] = round2(items.reduce((s, a) => s + a.tva[f], 0)), o), {}),
+      vefaPayeTTC: round2(items.reduce((s, a) => s + (a.vefa ? a.vefa.payeTTC : 0), 0)), vefaResteTTC: round2(items.reduce((s, a) => s + (a.vefa ? a.vefa.resteTTC : 0), 0)),
+      tva: ['montant', 'aRecuperer', 'fondsPropres', 'aReinvestir', 'detteRelais', 'payee', 'restante', 'recuperee', 'aFinancer'].reduce((o, f) => (o[f] = round2(items.reduce((s, a) => s + a.tva[f], 0)), o), {}),
       credit: ['interets', 'assurance', 'capital', 'total'].reduce((o, f) => (o[f] = round2(items.reduce((s, a) => s + a.credit[f], 0)), o), {}) };
     t.cashflowMensuel = round2(t.cashflow / 12);
     t.enrichissement = round2(t.cashflow + t.credit.capital);
@@ -5128,7 +5210,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese };
 })();
 // IMPORT_CORE_END
 
@@ -5627,8 +5709,12 @@ function calcBiensTotal() {
   return total;
 }
 function calcImmobilierTotal() {
-  const total = (DATA.immobilierBiens || []).reduce((sum, bien) => sum + (+bien.valeurActuelle || 0), 0);
-  return total;
+  // Même valeur que la page Immobilier (valeur estimée, sinon part HT payée en VEFA, sinon coût d'achat)
+  // + TVA payée à récupérer auprès de l'État (créance) : le restant dû des prêts est déduit à part.
+  const biens = DATA.immobilierBiens || [];
+  if (!biens.length) return 0;
+  const G = EmeraudeCore.immoGlobal(biens, { prets: DATA.prets || [], accounts: [], today: todayISO(), tmi: 0 });
+  return Math.round((G.total.valeur + G.total.tva.aRecuperer) * 100) / 100;
 }
 function calcBusinessTotal() {
   const total = (DATA.businessActifs || []).reduce((sum, actif) => sum + (+actif.valorisation || 0), 0);
@@ -7085,6 +7171,67 @@ function immoSetTva(field, v) { IMMOB_UI.draft.tva[field] = field === 'montant' 
 function immoSetTMI(v) { SETTINGS.immoTMI = +v; saveSettings(); renderImmobilier(); }
 function immoGoEmprunts() { document.querySelector('.nav-item[data-page="emprunts"]')?.click(); }
 
+// ── VEFA : saisie directe sur la fiche (appel payé + date, TVA remboursée, frais définitifs) ──
+const vefaBien = id => (DATA.immobilierBiens || []).find(b => b.id === id);
+function vefaSave() { saveData(); render(); renderImmobilier(); }
+function vefaPaye(id, list, i, on) {
+  const b = vefaBien(id); if (!b || !b.vefa || !b.vefa[list] || !b.vefa[list][i]) return;
+  const x = b.vefa[list][i];
+  x.paye = !!on;
+  if (on && !x.date) x.date = todayISO();
+  if (on) {
+    // Appel payé par le prêt en préfinancement : proposer d'ajouter le déblocage (les intérêts en dépendent)
+    const base = list === 'appels' ? +b.vefa.immoTTC || 0 : +b.vefa.mobilierTTC || 0;
+    const montant = Math.round(base * (+x.pct || 0)) / 100;
+    const pret = (DATA.prets || []).find(p => (b.pretIds || []).includes(p.id) && p.usage !== 'tva' && (b.tva || {}).pretId !== p.id
+      && Array.isArray(p.deblocages) && p.deblocages.length);
+    if (pret && montant > 0 && !pret.deblocages.some(d => d.date === x.date && Math.abs(d.montant - montant) < 0.01)
+      && confirm(`Appel « ${x.stade || x.id} » payé : ${fmtE(montant)} €.\n\nL’ajouter aux fonds débloqués du prêt « ${pret.nom || 'Prêt'} » au ${EmeraudeCore.isoToFr(x.date)} ?\n\nLe préfinancement calcule les intérêts sur les fonds débloqués. Choisissez Annuler si cet appel a été payé sur vos fonds propres.`)) {
+      pret.deblocages.push({ date: x.date, montant });
+      pret.deblocages.sort((a, c) => String(a.date).localeCompare(String(c.date)));
+    }
+  }
+  vefaSave();
+}
+function vefaDate(id, list, i, v) { const b = vefaBien(id); if (!b || !b.vefa) return; b.vefa[list][i].date = v; vefaSave(); }
+function vefaFraisDef(id, i, v) {
+  const b = vefaBien(id); if (!b || !b.vefa) return;
+  const s = String(v).trim().replace(',', '.');
+  b.vefa.frais[i].definitif = s === '' ? null : (parseFloat(s) || 0);
+  vefaSave();
+}
+function vefaAddRecup(id) {
+  const b = vefaBien(id); if (!b || !b.vefa) return;
+  const date = document.getElementById('vefa-rd-' + id)?.value;
+  const montant = parseFloat(String(document.getElementById('vefa-rm-' + id)?.value || '').replace(',', '.')) || 0;
+  if (!date || !(montant > 0)) { alert('Date et montant remboursé par l’État (SIE) obligatoires.'); return; }
+  (b.vefa.tvaRecuperee = b.vefa.tvaRecuperee || []).push({ id: 'rtva-' + Date.now().toString(36), date, montant });
+  vefaSave();
+}
+function vefaDelRecup(id, i) {
+  const b = vefaBien(id); if (!b || !b.vefa || !confirm('Retirer ce remboursement de TVA ?')) return;
+  b.vefa.tvaRecuperee.splice(i, 1); vefaSave();
+}
+// Formulaire « Modifier » : suivi VEFA dans le brouillon
+function immoVefaActiver() { IMMOB_UI.draft.vefa = EmeraudeCore.vefaNouveau(); renderImmobilier(); }
+function immoVefaRetirer() { if (confirm('Retirer le suivi VEFA de cette fiche ? (appels de fonds, TVA remboursée et frais saisis seront perdus à l’enregistrement)')) { delete IMMOB_UI.draft.vefa; renderImmobilier(); } }
+function immoVefaSet(field, v, num) { IMMOB_UI.draft.vefa[field] = num ? (parseFloat(String(v).replace(',', '.')) || 0) : v; }
+function immoVefaLine(list, i, field, v) {
+  const l = IMMOB_UI.draft.vefa[list][i];
+  if (field === 'definitif') { const s = String(v).trim().replace(',', '.'); l.definitif = s === '' ? null : (parseFloat(s) || 0); }
+  else l[field] = ['pct', 'provision'].includes(field) ? (parseFloat(String(v).replace(',', '.')) || 0) : v;
+  if (field === 'pct') renderImmobilier();
+}
+function immoVefaAdd(list) {
+  const v = IMMOB_UI.draft.vefa, arr = v[list] = v[list] || [];
+  const next = pfx => pfx + (Math.max(0, ...arr.map(x => parseInt(String(x.id || '').slice(1), 10) || 0)) + 1);
+  arr.push(list === 'frais' ? { id: 'frais-' + Date.now().toString(36), libelle: '', provision: 0, definitif: null }
+    : list === 'appels' ? { id: next('E'), stade: '', pct: 0, paye: false, date: '' } : { id: next('M'), stade: '', pct: 0, paye: false, date: '', avec: '' });
+  renderImmobilier();
+}
+function immoVefaDel(list, i) { IMMOB_UI.draft.vefa[list].splice(i, 1); renderImmobilier(); }
+function immoVefaPieces(text) { IMMOB_UI.draft.vefa.pieces = String(text).split('\n').map(s => s.trim()).filter(Boolean); }
+
 const immoRow = (label, value, cls, strong) => `<div class="immo-dl"><span>${label}</span><span class="${cls || ''}" style="${strong ? 'font-weight:700;color:var(--text-1)' : ''}">${value}</span></div>`;
 
 // « Où vont les loyers » : répartition des loyers annuels entre charges, impôt, crédit et cash-flow
@@ -7115,7 +7262,7 @@ function immoKpis(T) {
     ${tile('Rendement brut', immoPct(T.rendBrut), 'loyers / coût total')}
     ${tile('Rendement net-net', immoPct(T.rendNetNet), `net de charges ${immoPct(T.rendNet)}`)}
     ${tile('Rendement de l’apport', immoPct(T.rendApport), 'enrichissement / apport')}
-    ${tile('Rendement global (TRI)', immoPct(T.tri), T.tri == null ? 'date d’achat ou apport manquant' : `annualisé depuis l’achat${T.triPartiel ? ' · biens datés seulement' : ''}`, T.tri == null ? '' : immoCls(T.tri))}
+    ${tile('Rendement global (TRI)', immoPct(T.tri), T.tri == null ? (T.vefaResteTTC > 0 ? 'calculé après la livraison (VEFA en cours)' : 'date d’achat ou apport manquant') : `annualisé depuis l’achat${T.triPartiel ? ' · biens datés seulement' : ''}`, T.tri == null ? '' : immoCls(T.tri))}
   </div>`;
 }
 
@@ -7136,6 +7283,7 @@ function immoDetail(b, a) {
       <div style="font-size:0.68rem;color:var(--text-4)">${impEsc([b.type, b.ville, b.surface ? b.surface + ' m²' : '', b.dateAchat ? 'acheté le ' + EmeraudeCore.isoToFr(b.dateAchat) : ''].filter(Boolean).join(' · '))}</div></div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:0.75rem;color:var(--text-3)">
       ${a.coutTotal ? '' : '<span style="color:var(--gold-base)">✎ à compléter : prix et frais d’achat, loyers</span>'}
+      ${a.vefa ? `<span>VEFA <strong style="color:var(--gold-base)">${Math.round(a.vefa.pctPaye * 100)} % payé</strong></span>` : ''}
       <span>Net-net <strong style="color:var(--text-1)">${immoPct(a.rendNetNet)}</strong></span>
       <span>TRI <strong class="${a.tri == null ? '' : immoCls(a.tri)}">${immoPct(a.tri)}</strong></span>
       <span>Cash-flow <strong class="${immoCls(a.cashflow)}">${immoEur(a.cashflowMensuel)}/mois</strong></span>
@@ -7161,9 +7309,9 @@ function immoDetail(b, a) {
     : '<div style="font-size:0.72rem;color:var(--text-4)">Liez le compte bancaire dédié (ex. compte LMNP) via « Modifier » pour comparer le prévu au réel, à partir des relevés importés.</div>';
   const sec = (t, body) => `<div class="immo-sec"><div class="immo-sec-t">${t}</div>${body}</div>`;
   return impCard('', head + `<div class="immo-grid">
-    ${sec('Acquisition', `${immoRow('Prix net vendeur', immoEur(a.prix))}${immoRow('Frais de notaire', immoEur(a.frais.notaire))}${immoRow('Frais d’agence', immoEur(a.frais.agence))}
-      ${immoRow('Travaux', immoEur(a.frais.travaux))}${immoRow('Mobilier', immoEur(a.frais.mobilier))}${immoRow('Autres frais', immoEur(a.frais.autres))}
-      ${immoRow('Coût total', immoEur(a.coutTotal), '', true)}${immoRow('Valeur estimée', immoEur(a.valeur))}${immoRow('Plus-value latente', immoEur(a.plusValue), immoCls(a.plusValue))}
+    ${sec('Acquisition' + (a.vefa ? ' (HT, TVA récupérable)' : ''), `${immoRow(a.vefa ? 'Prix immobilier HT' : 'Prix net vendeur', immoEur(a.prix))}${immoRow(a.vefa ? 'Frais (notaire, actes)' : 'Frais de notaire', immoEur(a.frais.notaire))}${immoRow('Frais d’agence', immoEur(a.frais.agence))}
+      ${immoRow('Travaux', immoEur(a.frais.travaux))}${immoRow(a.vefa ? 'Mobilier HT' : 'Mobilier', immoEur(a.frais.mobilier))}${immoRow('Autres frais', immoEur(a.frais.autres))}
+      ${immoRow('Coût total', immoEur(a.coutTotal), '', true)}${immoRow(a.vefa && !+b.valeurActuelle ? 'Valeur retenue (part HT payée)' : 'Valeur estimée', immoEur(a.valeur))}${immoRow('Plus-value latente', immoEur(a.plusValue), immoCls(a.plusValue))}
       ${immoRow('Apport', immoEur(a.apport))}
       ${a.tva.montant ? immoRow(`TVA (${a.tva.financement === 'pret' ? 'prêt relais' : a.tva.financement === 'fondsPropres' ? 'fonds propres' : 'financement ?'})`, a.tva.aRecuperer ? `${immoEur(a.tva.aRecuperer)} à récupérer` : `récupérée le ${EmeraudeCore.isoToFr(a.tva.rembourseeLe)}`) : ''}
       ${a.tva.aReinvestir ? immoRow('TVA récupérée, à réinvestir', immoEur(a.tva.aReinvestir), 'amt-pos') : ''}
@@ -7175,11 +7323,135 @@ function immoDetail(b, a) {
       ${immoRow('Crédit (12 prochains mois)', '−' + immoEur(a.credit.total), 'amt-neg')}
       ${immoRow('Cash-flow annuel', immoEur(a.cashflow), immoCls(a.cashflow), true)}
       ${immoRow('Rendement brut · net · net-net', `${immoPct(a.rendBrut)} · ${immoPct(a.rendNet)} · ${immoPct(a.rendNetNet)}`)}
-      ${immoRow('Rendement de l’apport · TRI', `${immoPct(a.rendApport)} · ${immoPct(a.tri)}`)}`)}
+      ${immoRow('Rendement de l’apport · TRI', `${immoPct(a.rendApport)} · ${a.vefaEnCours ? 'après livraison' : immoPct(a.tri)}`)}`)}
     ${sec('Réel : compte dédié, 12 derniers mois', reel)}
   </div>
+  ${a.vefa ? vefaDetail(b, a) : ''}
   <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-em" onclick="immoEdit('${impEsc(b.id)}')">✎ Modifier</button>
     ${b.fixe ? '' : `<button class="btn btn-ghost" style="color:#FCA5A5" onclick="immoDelete('${impEsc(b.id)}')">🗑 Supprimer</button>`}</div>`);
+}
+
+// ── VEFA : fiche du lot, appels de fonds, TVA, frais, pièces ──
+function vefaDetail(b, a) {
+  const v = b.vefa, s = a.vefa, id = impEsc(b.id);
+  const sec = (t, body) => `<div class="immo-sec"><div class="immo-sec-t">${t}</div>${body}</div>`;
+  const e = n => fmtE(n) + ' €';
+  const lot = sec('Lot', (v.residence ? immoRow('Résidence', impEsc(v.residence)) : '') + (v.adresse ? immoRow('Adresse', impEsc(v.adresse)) : '')
+    + immoRow('Lot · bâtiment · étage', impEsc([v.lot ? 'lot ' + v.lot : '', v.batiment ? 'bât. ' + v.batiment : '', v.etage || ''].filter(Boolean).join(' · ') || '—'))
+    + immoRow('Surface habitable', b.surface ? String(b.surface).replace('.', ',') + ' m²' : '—')
+    + (+v.tantiemes ? immoRow('Tantièmes de copropriété', `${v.tantiemes} / ${v.tantiemesBase || 10000}`) : '')
+    + immoRow('Immobilier TTC · HT · TVA', `${e(s.immo.ttc)} · ${e(s.immo.ht)} · ${e(s.immo.tva)}`)
+    + (s.mobilier.ttc ? immoRow('Mobilier TTC · HT · TVA', `${e(s.mobilier.ttc)} · ${e(s.mobilier.ht)} · ${e(s.mobilier.tva)}`) : '')
+    + immoRow('Prix total TTC · HT', `${e(s.prixTTC)} · ${e(s.prixHT)}`, '', true)
+    + immoRow('Prix au m² HT · TTC', s.prixM2HT ? `${immoEur(s.prixM2HT)} · ${immoEur(s.prixM2TTC)}` : 'surface à saisir')
+    + immoRow('Décaissement initial' + (s.premierPaiement ? ` (${EmeraudeCore.isoToFr(s.premierPaiement)})` : ''), e(s.decaissementInitial))
+    + immoRow('Coût de revient HT (base des rendements)', e(s.coutRevientHT), '', true));
+  const frais = sec('Frais d’acquisition', (s.frais.length ? s.frais.map((f, i) => `<div class="immo-dl"><span>${impEsc(f.libelle)}<br><small style="color:var(--text-4)">provision ${e(f.provision)}</small></span>
+      <span><input class="form-input" style="width:118px;padding:3px 6px;text-align:right" type="number" step="0.01" placeholder="définitif" title="Montant définitif (décompte du notaire)" value="${f.definitif == null ? '' : f.definitif}" onchange="vefaFraisDef('${id}', ${i}, this.value)"></span></div>`).join('')
+      + immoRow('Frais retenus', e(s.fraisTotal), '', true)
+      + (s.regularisation ? immoRow('Régularisation (définitif − provision)', e(s.regularisation), s.regularisation > 0 ? 'amt-neg' : 'amt-pos') : '')
+      + (s.fraisProvisoires ? '<div style="font-size:0.66rem;color:var(--gold-base);margin-top:6px">Provisions : saisissez le montant définitif dès le décompte du notaire.</div>' : '')
+    : '<div style="font-size:0.72rem;color:var(--text-4)">Aucun frais saisi (Modifier › Suivi VEFA).</div>'));
+  const fin = (b.tva || {}).financement;
+  const recup = (v.tvaRecuperee || []).map((r, i) => `<div class="immo-dl"><span>Remboursement du ${EmeraudeCore.isoToFr(r.date)}</span><span class="amt-pos">${e(+r.montant || 0)} <a href="#" onclick="vefaDelRecup('${id}', ${i});return false" title="Retirer" style="color:var(--text-4);margin-left:4px">✕</a></span></div>`).join('');
+  const tva = sec('Suivi TVA', immoRow('TVA du prix (immobilier + mobilier)', e(s.tvaTotale))
+    + immoRow('TVA payée à ce jour', e(s.tvaPayee)) + immoRow('TVA restant à appeler', e(s.tvaRestante))
+    + immoRow('TVA remboursée par l’État', e(s.tvaRecuperee), s.tvaRecuperee ? 'amt-pos' : '') + recup
+    + `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0"><input id="vefa-rd-${id}" class="form-input" type="date" style="width:auto;padding:3px 6px">
+        <input id="vefa-rm-${id}" class="form-input" type="number" step="0.01" placeholder="montant remboursé" style="width:150px;padding:3px 6px">
+        <button type="button" class="btn btn-ghost" style="padding:3px 10px" onclick="vefaAddRecup('${id}')">➕ Remboursement</button></div>`
+    + immoRow('TVA à récupérer (payée − remboursée)', e(s.tvaARecuperer), '', true)
+    + immoRow('Financement de la TVA', fin === 'pret' ? `prêt relais ${s.relais ? e(s.relais) : '(montant à lier)'}` : fin === 'fondsPropres' ? 'apport (fonds propres)' : 'non renseigné (Modifier)')
+    + immoRow('TVA restant à financer sur fonds propres', e(s.tvaAFinancer), s.tvaAFinancer > 0 ? 'amt-neg' : '', true)
+    + '<div style="font-size:0.64rem;color:var(--text-4);margin-top:6px">L’appli suit les montants ; le droit à récupération et le calendrier de remboursement sont à confirmer avec le gestionnaire ou l’expert-comptable.</div>');
+  const pieces = sec('Pièces du dossier', (v.pieces || []).length ? `<ul style="margin:0 0 0 16px;font-size:0.74rem;color:var(--text-2);line-height:1.7">${v.pieces.map(x => `<li>${impEsc(x)}</li>`).join('')}</ul>`
+    : '<div style="font-size:0.72rem;color:var(--text-4)">Aucune pièce listée (Modifier › Suivi VEFA).</div>');
+  // Appels de fonds : le mobilier est regroupé sous l'appel immobilier du même stade
+  const cell = (l, list, i, sub) => `<tr style="${sub || l.grp ? 'box-shadow:inset 3px 0 0 var(--gold-base);' : ''}${l.paye ? '' : 'opacity:0.92'}">
+      <td style="white-space:nowrap">${impEsc(l.id)}</td><td>${sub ? '<span style="color:var(--text-4)">↳ Mobilier — </span>' : l.type === 'mobilier' ? 'Mobilier — ' : ''}${impEsc(l.stade)}</td>
+      <td style="text-align:right">${String(l.pct).replace('.', ',')} %</td><td style="text-align:right;white-space:nowrap">${fmtE(l.ttc)}</td>
+      <td style="text-align:right;white-space:nowrap">${fmtE(l.ht)}</td><td style="text-align:right;white-space:nowrap">${fmtE(l.tva)}</td>
+      <td style="text-align:center"><input type="checkbox" ${l.paye ? 'checked' : ''} onchange="vefaPaye('${id}', '${list}', ${i}, this.checked)" title="Appel payé"></td>
+      <td><input class="form-input" type="date" style="width:auto;padding:2px 5px;font-size:0.72rem" value="${impEsc(l.date || '')}" onchange="vefaDate('${id}', '${list}', ${i}, this.value)"></td></tr>`;
+  const pl = (type, xid) => s.plan.find(l => l.type === type && l.id === xid);
+  const rows = [];
+  s.stades.forEach(st => {
+    const ii = (v.appels || []).findIndex(x => x.id === st.id);
+    if (ii >= 0) rows.push(cell(Object.assign({ grp: st.mobilier.length > 0 }, pl('immo', st.id)), 'appels', ii, false));
+    else { const mi = (v.mobilierAppels || []).findIndex(x => x.id === st.id); if (mi >= 0) rows.push(cell(pl('mobilier', st.id), 'mobilierAppels', mi, false)); }
+    st.mobilier.forEach(m => rows.push(cell(m, 'mobilierAppels', (v.mobilierAppels || []).findIndex(x => x.id === m.id), true)));
+  });
+  rows.push(`<tr style="font-weight:700"><td></td><td>Payé · reste à payer</td><td style="text-align:right">${Math.round(s.pctPaye * 100)} %</td>
+    <td colspan="5" style="text-align:left;white-space:nowrap">${e(s.payeTTC)} payés · <span class="amt-neg">${e(s.resteTTC)}</span> à venir (immobilier ${e(s.resteImmoTTC)}${s.resteMobilierTTC ? ' + mobilier ' + e(s.resteMobilierTTC) : ''})</td></tr>`);
+  const ecart = s.ecartPct ? `<div style="font-size:0.68rem;color:var(--gold-base);margin-bottom:6px">⚠ Les pourcentages ne font pas 100 % (immobilier ${String(s.ecartPct.immo).replace('.', ',')} %${s.mobilier.ttc ? ', mobilier ' + String(s.ecartPct.mobilier).replace('.', ',') + ' %' : ''}) : vérifiez l’échéancier (Modifier).</div>` : '';
+  return `<div class="immo-sec" style="margin-top:12px"><div class="immo-sec-t">VEFA : appels de fonds</div>${ecart}
+      <div style="font-size:0.66rem;color:var(--text-4);margin-bottom:6px">Cochez un appel quand il est payé et saisissez sa date (dates futures : selon l’avancement du chantier). Les lignes liserées d’or tombent au même stade.</div>
+      <div style="overflow-x:auto">${impTable(['', 'Stade', '%', 'TTC', 'HT', 'TVA', 'Payé', 'Date'], rows)}</div></div>
+    <div class="immo-grid" style="margin-top:12px">${lot}${tva}${frais}${pieces}</div>`;
+}
+
+// Décaissement cumulé par stade (SVG, courbes de Bézier) : trait plein = payé, pointillé = à venir
+function vefaChart(its) {
+  const W = 640, H = 210, pl = 58, pr = 14, pt = 14, pb = 30;
+  const ids = its[0].a.vefa.stades.map(st => st.id);
+  if (!ids.length) return '';
+  const serie = (nom, col, stades) => {
+    let last = 0;
+    const pts = [0].concat(ids.map(x => { const st = stades.find(z => z.id === x); last = st ? st.cumul : last; return last; }));
+    let payes = 0; while (payes < ids.length && (stades.find(z => z.id === ids[payes]) || {}).paye) payes++;
+    return { nom, col, pts, payes };
+  };
+  const cols = ['#10B981', '#60A5FA', '#A78BFA', '#F472B6'];
+  const S = its.map((x, k) => serie(x.b.nom, cols[k % cols.length], x.a.vefa.stades));
+  if (S.length > 1) S.push({ nom: 'Total', col: '#DAA520', pts: S[0].pts.map((_, i) => S.reduce((s, z) => s + z.pts[i], 0)), payes: Math.min(...S.map(z => z.payes)), total: true });
+  const max = Math.max(1, ...S.map(z => z.pts[z.pts.length - 1]));
+  const X = i => pl + i * (W - pl - pr) / ids.length, Y = v => pt + (1 - v / max) * (H - pt - pb);
+  const path = (pts, a, z) => { let d = `M${X(a).toFixed(1)},${Y(pts[a]).toFixed(1)}`; for (let i = a + 1; i <= z; i++) { const xm = ((X(i - 1) + X(i)) / 2).toFixed(1); d += ` C${xm},${Y(pts[i - 1]).toFixed(1)} ${xm},${Y(pts[i]).toFixed(1)} ${X(i).toFixed(1)},${Y(pts[i]).toFixed(1)}`; } return d; };
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(f => `<line x1="${pl}" x2="${W - pr}" y1="${Y(max * f).toFixed(1)}" y2="${Y(max * f).toFixed(1)}" stroke="rgba(148,163,184,0.12)"/><text x="${pl - 6}" y="${(Y(max * f) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-4)">${Math.round(max * f / 1000)} k€</text>`).join('');
+  const labs = ['Acte'].concat(ids).map((l, i) => `<text x="${X(i).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="9" fill="var(--text-4)">${i ? impEsc(l) : ''}</text>`).join('');
+  const lines = S.map(z => `${z.payes > 0 ? `<path d="${path(z.pts, 0, z.payes)}" fill="none" stroke="${z.col}" stroke-width="${z.total ? 2.4 : 1.8}"/>` : ''}
+    ${z.payes < ids.length ? `<path d="${path(z.pts, z.payes, ids.length)}" fill="none" stroke="${z.col}" stroke-width="${z.total ? 2 : 1.5}" stroke-dasharray="5 4" opacity="0.75"/>` : ''}
+    ${z.pts.map((v, i) => i ? `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${i <= z.payes ? 3 : 2.2}" fill="${i <= z.payes ? z.col : 'var(--bg-card, #0b1512)'}" stroke="${z.col}" stroke-width="1.2"><title>${impEsc(z.nom)} · ${impEsc(ids[i - 1])} : ${fmtE(v)} € cumulés${i <= z.payes ? ' (payé)' : ' (à venir)'}</title></circle>` : '').join('')}`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Décaissement cumulé par stade">${grid}${labs}${lines}</svg>
+    <div class="immo-legend">${S.map(z => `<span><i style="background:${z.col}"></i>${impEsc(z.nom)}</span>`).join('')}<span>trait plein : payé · pointillé : à venir</span></div>`;
+}
+
+// Bandeau de l'opération VEFA (tous les lots suivis)
+function vefaOverview(list, G) {
+  const its = list.map((b, i) => ({ b, a: G.items[i] })).filter(x => x.a.vefa);
+  if (!its.length) return '';
+  const sum = f => its.reduce((s, x) => s + (+x.a.vefa[f] || 0), 0);
+  const v0 = its[0].b.vefa;
+  const prix = sum('prixTTC'), paye = sum('payeTTC');
+  const dates = its.map(x => x.a.vefa.premierPaiement || x.b.dateAchat).filter(Boolean).sort();
+  const tile = (lbl, val, sub, cls) => `<div class="immo-kpi"><div class="immo-kpi-val ${cls || ''}">${val}</div><div class="immo-kpi-lbl">${lbl}</div>${sub ? `<div class="immo-kpi-sub">${sub}</div>` : ''}</div>`;
+  const head = `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div><div style="font-size:0.95rem;font-weight:700;color:var(--text-1)">${impEsc(v0.residence || 'Opération en VEFA')}</div>
+        <div style="font-size:0.7rem;color:var(--text-4)">${impEsc([v0.adresse, dates[0] ? 'acte du ' + EmeraudeCore.isoToFr(dates[0]) : '', its.map(x => x.b.nom).join(' + ')].filter(Boolean).join(' · '))}</div></div>
+      <div style="font-size:0.75rem;color:${paye >= prix - 0.005 ? 'var(--em-bright)' : 'var(--gold-base)'};align-self:center">${paye >= prix - 0.005 ? '✓ Prix entièrement payé' : 'VEFA en cours · ' + Math.round(prix ? paye / prix * 100 : 0) + ' % payé'}</div></div>`;
+  const kpis = `<div class="immo-kpis">
+      ${tile('Prix total TTC', immoEur(prix), `HT ${immoEur(sum('prixHT'))} · TVA ${immoEur(sum('tvaTotale'))}`)}
+      ${tile('Payé', immoEur(paye), `${Math.round(prix ? paye / prix * 100 : 0)} % du prix`, 'amt-pos')}
+      ${tile('Reste à payer', immoEur(prix - paye), `immobilier ${immoEur(sum('resteImmoTTC'))} · mobilier ${immoEur(sum('resteMobilierTTC'))}`, prix - paye > 0.005 ? 'amt-neg' : '')}
+      ${tile('TVA payée', immoEur(sum('tvaPayee')), `restant à appeler ${immoEur(sum('tvaRestante'))}`)}
+      ${tile('TVA à récupérer', immoEur(sum('tvaARecuperer')), `déjà remboursée ${immoEur(sum('tvaRecuperee'))}`)}
+      ${tile('TVA à financer (fonds propres)', immoEur(sum('tvaAFinancer')), 'TVA totale − remboursée − prêts relais', sum('tvaAFinancer') > 0 ? 'amt-neg' : '')}
+      ${tile('Frais d’acquisition', immoEur(sum('fraisTotal')), its.some(x => x.a.vefa.fraisProvisoires) ? 'dont provisions à régulariser' : 'définitifs')}
+    </div>`;
+  // Tableau croisé : un appel par ligne, un lot par colonne
+  const ids = [];
+  its.forEach(x => x.a.vefa.stades.forEach(st => { if (!ids.some(z => z.id === st.id)) ids.push({ id: st.id, stade: st.stade }); }));
+  const rows = ids.map(r => {
+    const vals = its.map(x => x.a.vefa.stades.find(st => st.id === r.id));
+    const tot = vals.reduce((s, st) => s + (st ? st.ttc : 0), 0);
+    const ok = vals.every(st => !st || st.paye);
+    return `<tr><td>${impEsc(r.id)}</td><td>${impEsc(r.stade)}${vals.some(st => st && st.mobilier.length) ? ' <span style="color:var(--gold-base);font-size:0.66rem">+ mobilier</span>' : ''}</td>
+      ${vals.map(st => `<td style="text-align:right;white-space:nowrap">${st ? fmtE(st.ttc) : '—'}</td>`).join('')}
+      <td style="text-align:right;white-space:nowrap;font-weight:600">${fmtE(tot)}</td><td style="text-align:center">${ok ? '<span class="amt-pos">✓ payé</span>' : '<span style="color:var(--text-4)">à venir</span>'}</td></tr>`;
+  });
+  return impCard('🏗 VEFA : avancement des paiements', head + kpis
+    + `<div style="margin-top:12px">${vefaChart(its)}</div>`
+    + `<div style="overflow-x:auto;margin-top:10px">${impTable(['', 'Stade'].concat(its.map(x => impEsc(x.b.nom) + ' (TTC)'), ['Total', 'Statut']), rows)}</div>`);
 }
 
 function immoForm() {
@@ -7204,15 +7476,46 @@ function immoForm() {
     ${sec('Le bien', `<div class="form-grid">${txt('nom', 'Nom *', 'text', 'Ex : Appartement C1120')}
       ${impField('Type', `<select class="form-select" onchange="immoSet('type', this.value)">${IMMO_TYPES.map(t => `<option ${t === d.type ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
       ${txt('ville', 'Ville')}${num('surface', 'Surface (m²)', '0.1')}${txt('dateAchat', 'Date d’achat', 'date')}${num('valeurActuelle', 'Valeur estimée aujourd’hui')}</div>`)}
-    ${sec('Acquisition', `<div class="form-grid">${num('prixAchat', 'Prix net vendeur')}${num('fraisNotaire', 'Frais de notaire')}${num('fraisAgence', 'Frais d’agence')}
+    ${d.vefa ? sec('Acquisition', `<div class="form-grid">${num('fraisAgence', 'Frais d’agence')}${num('travaux', 'Travaux')}${num('autresFrais', 'Autres frais (dossier, garantie…)')}</div>`,
+        'Prix immobilier, mobilier (HT) et frais de notaire : repris du suivi VEFA ci-dessous.')
+      : sec('Acquisition', `<div class="form-grid">${num('prixAchat', 'Prix net vendeur')}${num('fraisNotaire', 'Frais de notaire')}${num('fraisAgence', 'Frais d’agence')}
       ${num('travaux', 'Travaux')}${num('mobilier', 'Mobilier')}${num('autresFrais', 'Autres frais (dossier, garantie…)')}</div>`)}
+    ${d.vefa ? sec('Suivi VEFA', (() => {
+        const v = d.vefa;
+        const vnum = (f, l, st) => impField(l, `<input class="form-input" type="number" step="${st || '0.01'}" value="${+v[f] || 0}" onchange="immoVefaSet('${f}', this.value, true)">`);
+        const vtxt = (f, l, ph) => impField(l, `<input class="form-input" value="${impEsc(v[f] || '')}" placeholder="${ph || ''}" onchange="immoVefaSet('${f}', this.value)">`);
+        const pctTot = list => (v[list] || []).reduce((s, x) => s + (+x.pct || 0), 0);
+        const lineA = (list, x, i) => `<div class="immo-line" style="grid-template-columns:52px minmax(0,1fr) 80px ${list === 'mobilierAppels' ? '92px ' : ''}auto">
+            <input class="form-input" value="${impEsc(x.id)}" disabled title="Identifiant">
+            <input class="form-input" value="${impEsc(x.stade || '')}" placeholder="Stade" onchange="immoVefaLine('${list}', ${i}, 'stade', this.value)">
+            <input class="form-input" type="number" step="0.5" value="${+x.pct || 0}" title="%" onchange="immoVefaLine('${list}', ${i}, 'pct', this.value)">
+            ${list === 'mobilierAppels' ? `<select class="form-select" title="Payé au même stade que" onchange="immoVefaLine('${list}', ${i}, 'avec', this.value)"><option value="">seul</option>${(v.appels || []).map(a => `<option value="${impEsc(a.id)}" ${x.avec === a.id ? 'selected' : ''}>avec ${impEsc(a.id)}</option>`).join('')}</select>` : ''}
+            <button type="button" class="btn btn-ghost" style="padding:4px 9px" onclick="immoVefaDel('${list}', ${i})" title="Retirer">✕</button></div>`;
+        return `<div class="form-grid">${vtxt('residence', 'Résidence / programme')}${vtxt('adresse', 'Adresse')}${vtxt('lot', 'N° de lot')}${vtxt('batiment', 'Bâtiment')}${vtxt('etage', 'Étage', 'ex. R+4')}
+            ${vnum('tantiemes', 'Tantièmes', '1')}${vnum('tantiemesBase', 'sur (base)', '1')}${vnum('tauxTVA', 'Taux de TVA (%)', '0.1')}
+            ${vnum('immoTTC', 'Prix immobilier TTC')}${vnum('mobilierTTC', 'Prix du mobilier TTC')}</div>
+          <div style="font-size:0.72rem;color:var(--text-2);margin:10px 0 4px">Échéancier des appels de fonds (immobilier) — total ${String(pctTot('appels')).replace('.', ',')} %</div>
+          ${(v.appels || []).map((x, i) => lineA('appels', x, i)).join('')}<button type="button" class="btn btn-ghost" style="padding:4px 10px;margin-top:4px" onclick="immoVefaAdd('appels')">➕ Appel</button>
+          <div style="font-size:0.72rem;color:var(--text-2);margin:10px 0 4px">Échéancier du mobilier — total ${String(pctTot('mobilierAppels')).replace('.', ',')} %</div>
+          ${(v.mobilierAppels || []).map((x, i) => lineA('mobilierAppels', x, i)).join('')}<button type="button" class="btn btn-ghost" style="padding:4px 10px;margin-top:4px" onclick="immoVefaAdd('mobilierAppels')">➕ Appel mobilier</button>
+          <div style="font-size:0.72rem;color:var(--text-2);margin:10px 0 4px">Frais (provisions puis montant définitif du décompte)</div>
+          ${(v.frais || []).map((f, i) => `<div class="immo-line" style="grid-template-columns:minmax(0,1fr) 110px 110px auto">
+              <input class="form-input" value="${impEsc(f.libelle || '')}" placeholder="Libellé (ex. acte de vente)" onchange="immoVefaLine('frais', ${i}, 'libelle', this.value)">
+              <input class="form-input" type="number" step="0.01" value="${+f.provision || 0}" title="Provision" onchange="immoVefaLine('frais', ${i}, 'provision', this.value)">
+              <input class="form-input" type="number" step="0.01" value="${f.definitif == null ? '' : f.definitif}" placeholder="définitif" title="Définitif" onchange="immoVefaLine('frais', ${i}, 'definitif', this.value)">
+              <button type="button" class="btn btn-ghost" style="padding:4px 9px" onclick="immoVefaDel('frais', ${i})" title="Retirer">✕</button></div>`).join('')}
+          <button type="button" class="btn btn-ghost" style="padding:4px 10px;margin-top:4px" onclick="immoVefaAdd('frais')">➕ Frais</button>
+          ${impField('Pièces du dossier (une par ligne, sans pièce jointe ni coordonnées bancaires)', `<textarea class="form-input" rows="3" onchange="immoVefaPieces(this.value)">${impEsc((v.pieces || []).join('\n'))}</textarea>`)}
+          <button type="button" class="btn btn-ghost" style="padding:4px 10px;margin-top:8px;color:#FCA5A5" onclick="immoVefaRetirer()">Retirer le suivi VEFA</button>`;
+      })(), 'Prix TTC des actes, échéancier légal des appels de fonds, frais. Les appels payés et la TVA remboursée se saisissent directement sur la fiche.')
+      : sec('Suivi VEFA', `<button type="button" class="btn btn-ghost" onclick="immoVefaActiver()">🏗 Activer le suivi VEFA</button>`, 'Achat sur plan : appels de fonds par stade, TVA payée / à récupérer, frais provisionnés, pièces du dossier.')}
     ${sec('Financement', prets + `<div style="font-size:0.68rem;margin-top:4px"><a href="#" onclick="immoGoEmprunts();return false" style="color:var(--em-bright)">➕ Créer un prêt dans Emprunts</a> (la saisie en cours ici est conservée)</div>`,
       'Cochez les prêts qui financent ce bien : mensualités, intérêts et capital restant dû sont repris automatiquement.')}
     ${sec('TVA de l’achat (VEFA)', `<div class="form-grid">
-        ${impField('Montant de la TVA', `<input class="form-input" type="number" step="0.01" value="${+d.tva.montant || 0}" onchange="immoSetTva('montant', this.value)">`)}
+        ${d.vefa ? '' : impField('Montant de la TVA', `<input class="form-input" type="number" step="0.01" value="${+d.tva.montant || 0}" onchange="immoSetTva('montant', this.value)">`)}
         ${impField('Avancée par', `<select class="form-select" onchange="immoSetTva('financement', this.value)">${[['', '—'], ['pret', 'Prêt relais TVA'], ['fondsPropres', 'Fonds propres']].map(([v, l]) => `<option value="${v}" ${d.tva.financement === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
         ${d.tva.financement === 'pret' ? impField('Prêt relais', `<select class="form-select" onchange="immoSetTva('pretId', this.value)"><option value="">—</option>${(DATA.prets || []).map(p => `<option value="${impEsc(p.id)}" ${d.tva.pretId === p.id ? 'selected' : ''}>${impEsc(p.nom || p.id)}</option>`).join('')}</select>`) : ''}
-        ${impField('Remboursée par l’État le', `<input class="form-input" type="date" value="${impEsc(d.tva.rembourseeLe || '')}" onchange="immoSetTva('rembourseeLe', this.value)">`)}</div>`,
+        ${d.vefa ? '<div style="font-size:0.7rem;color:var(--text-4);align-self:end">Montant et remboursements : calculés par le suivi VEFA (TVA des appels payés ; remboursements saisis sur la fiche).</div>' : impField('Remboursée par l’État le', `<input class="form-input" type="date" value="${impEsc(d.tva.rembourseeLe || '')}" onchange="immoSetTva('rembourseeLe', this.value)">`)}</div>`,
       'TVA payée à l’achat et remboursée ensuite par l’État : comptée comme créance à récupérer (hors coût du bien). Avancée en fonds propres, elle redevient disponible à réinvestir une fois remboursée.')}
     ${sec('Compte bancaire dédié', impField('Compte', `<select class="form-select" onchange="immoSet('compteId', this.value)"><option value="">—</option>${comptes.map(c => `<option value="${impEsc(c.id)}" ${d.compteId === c.id ? 'selected' : ''}>${impEsc(c.nom)}</option>`).join('')}</select>`),
       'Facultatif : le compte où arrivent les loyers et partent les charges (ex. compte LMNP), pour comparer le prévu au réel.')}
@@ -7255,10 +7558,12 @@ function renderImmobilier() {
       <li><strong>Cash-flow</strong> = loyers − charges − impôt − échéances des 12 prochains mois (intérêts + assurance + capital).</li>
       <li><strong>Enrichissement</strong> = cash-flow + capital remboursé (la part du crédit qui augmente votre patrimoine). <strong>Rendement de l’apport</strong> = enrichissement / apport.</li>
       <li><strong>TVA (VEFA)</strong> : hors coût du bien, comptée comme créance à récupérer. Le capital d’un prêt relais TVA est remboursé par l’État, pas par les loyers : seuls ses intérêts entrent dans le cash-flow. <strong>Préfinancement</strong> : seuls les fonds débloqués sont dus et portent intérêts.</li>
+      <li><strong>VEFA suivie</strong> : coût = prix immobilier et mobilier HT + frais (définitifs, sinon provisions) ; valeur par défaut = part HT déjà payée ; TVA à récupérer = TVA des appels payés − remboursements de l’État. TRI calculé après le paiement complet.</li>
       <li><strong>Rendement global (TRI)</strong> : taux annuel qui égalise l’apport versé à l’achat, les flux mensuels depuis (loyers − charges − impôt − échéances réelles des prêts) et la valeur nette d’aujourd’hui (valeur estimée − capital restant dû), comme si le bien était revendu à sa valeur estimée, sans frais de revente ni impôt sur la plus-value. Loyers et charges actuels supposés constants depuis l’achat.</li>
     </ul></details>`;
   root.innerHTML = immoForm()
     + impCard('🏠 Immobilier locatif — vue d’ensemble', header + immoKpis(G.total) + help)
+    + vefaOverview(list, G)
     + impCard('Où vont les loyers', G.items.map(a => immoBar(a, a.nom)).join('') + (G.items.length > 1 ? immoBar(G.total, 'Ensemble') : '')
       + `<div class="immo-legend">${[['Charges', '#F59E0B'], ['Impôt', '#EF4444'], ['Intérêts + assurance', '#A78BFA'], ['Capital remboursé (enrichissement)', '#60A5FA'], ['Cash-flow libre', '#10B981']].map(([l, c]) => `<span><i style="background:${c}"></i>${l}</span>`).join('')}<span><i class="immo-legend-mark"></i>niveau des loyers (au-delà : effort d’épargne)</span></div>`)
     + impCard('Comparaison', immoCompare(G))
@@ -10914,7 +11219,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261112-1204-df026c0';
+const APP_BUILD = '20261112-1222-9a26439';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
