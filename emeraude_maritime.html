@@ -522,6 +522,7 @@ html, body {
    3D CARD SYSTEM
 ............................................... */
 .c3w { perspective: 1100px; }
+.c3.no-tilt { transform: none !important; will-change: auto; }
 
 .c3 {
   position: relative; overflow: hidden;
@@ -1122,6 +1123,11 @@ html, body {
 .ptf-ops-table tbody tr { border-bottom:1px solid rgba(16,185,129,0.07); }
 .ptf-ops-table tbody tr:hover { background:rgba(16,185,129,0.04); }
 .ptf-ops-table td { padding:8px 10px; }
+.ptf-ops-table th.tri { cursor:pointer; user-select:none; white-space:nowrap; }
+.ptf-ops-table th.tri:hover { color:var(--em-bright); }
+.ptf-ops-table th.tri.actif { color:var(--em-bright); }
+.ptf-ops-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; font-size:0.72rem; color:var(--text-3); }
+.ptf-ops-bar select, .ptf-ops-bar input { width:auto; padding:5px 8px; font-size:0.74rem; }
 .op-achat { color:var(--em-glow); }
 .op-vente { color:#f87171; }
 .op-dividende { color:var(--gold-bright); }
@@ -2137,10 +2143,14 @@ function attachTilt(card) {
 
   card.addEventListener('mousemove', e => {
     const r  = card.getBoundingClientRect();
+    // Grandes cartes (tableaux, listes) : pas d'inclinaison, sinon les bords se déplacent de dizaines
+    // de pixels et le texte devient flou. Ailleurs, amplitude réduite selon la taille de la carte.
+    if (card.classList.contains('no-tilt') || r.height > 640) { if (card.style.transform) card.style.transform = ''; return; }
+    const amp = 2.5 * Math.min(1, 380 / Math.max(r.width, r.height));
     const dx = (e.clientX - r.left  - r.width  / 2) / (r.width  / 2);
     const dy = (e.clientY - r.top   - r.height / 2) / (r.height / 2);
-    const rx = -dy * 2.5;
-    const ry =  dx * 2.5;
+    const rx = -dy * amp;
+    const ry =  dx * amp;
     card.style.transform = `perspective(1100px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg) translateZ(5px)`;
     card.style.setProperty('--mx', ((e.clientX - r.left) / r.width  * 100).toFixed(1) + '%');
     card.style.setProperty('--my', ((e.clientY - r.top)  / r.height * 100).toFixed(1) + '%');
@@ -2808,7 +2818,7 @@ function renderEmprunts() {
 // ......................................
 // PORTEFEUILLE
 // ......................................
-const PTF_UI = { posId:null, editPea:false, editPos:null, showAddPos:false, editOp:null, showAddOp:false };
+const PTF_UI = { posId:null, editPea:false, editPos:null, showAddPos:false, editOp:null, showAddOp:false, opsRecherche:'' };
 // Cours en direct : Yahoo Finance refuse les appels d'une page web (CORS, vérifié le 2026-10-26),
 // ils passent donc par le relais Google Drive (action « cours »).
 const PTF_LIVE = { loading:false, lastTs:0, lastTry:0, lastError:'', online:0, total:0, started:false };
@@ -2874,9 +2884,20 @@ async function ptfRefresh(showNotice = false) {
   const btn = document.getElementById('ptf-refresh-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⧘ Chargement…'; }
   ptfRenderBadge();
-  const range = t => EmeraudeCore.quoteRange(EmeraudeCore.lastCloseDate(ptf.coursHist?.[t]), today);
+  // Historique des cours depuis l'ouverture du PEA (une fois, puis seulement les jours manquants)
+  const debut = (ptf.operations || []).some(o => o.isin) ? EmeraudeCore.peaHistorique(ptf, today).start : '';
+  const premier = h => Object.keys((h && h.closes) || {}).reduce((a, b) => (!a || b < a ? b : a), '');
+  const aRemonter = t => { const h = ptf.coursHist?.[t]; return !!(debut && t && (!h || (premier(h) > EmeraudeCore.toISO(new Date(Date.parse(debut) + 7 * 864e5)) && !(h.depuis && h.depuis <= debut)))); };
+  const range = t => aRemonter(t) ? EmeraudeCore.quoteRange(debut, today) : EmeraudeCore.quoteRange(EmeraudeCore.lastCloseDate(ptf.coursHist?.[t]), today);
+  ptf.isinTickers = ptf.isinTickers || {};
   const items = ptf.positions.filter(p => p.ticker || p.isin)
-    .map(p => ({ key: p.id, symbol: p.ticker || '', isin: p.isin || '', range: range(p.ticker) }));
+    .map(p => { const s = p.ticker || ptf.isinTickers[p.isin] || ''; return { key: p.id, symbol: s, isin: p.isin || '', range: s ? range(s) : debut ? EmeraudeCore.quoteRange(debut, today) : '1y', long: !s || aRemonter(s) }; });
+  const detenus = new Set(ptf.positions.map(p => p.isin).filter(Boolean));
+  EmeraudeCore.peaIsins(ptf).filter(i => !detenus.has(i)).forEach(i => {
+    const s = ptf.isinTickers[i] || '';
+    if (s && !aRemonter(s) && EmeraudeCore.lastCloseDate(ptf.coursHist?.[s]) >= (EmeraudeCore.toISO(((ptf.operations || []).filter(o => o.isin === i).map(o => o.date).sort().pop())) || '')) return; // déjà couvert
+    items.push({ key: 'isin:' + i, symbol: s, isin: i, range: s && !aRemonter(s) ? range(s) : EmeraudeCore.quoteRange(debut || today, today), long: true });
+  });
   items.push({ key: '^FCHI', symbol: '^FCHI', range: range('^FCHI') });
   let online = 0;
   const errors = [];
@@ -2889,8 +2910,19 @@ async function ptfRefresh(showNotice = false) {
       if (q.error) { errors.push(`${p.nom} : ${q.error}`); continue; }
       if (q.devise && q.devise !== (p.devise || 'EUR')) { errors.push(`${p.nom} : cours en ${q.devise} (${q.symbol}) — saisissez le ticker de la cotation en ${p.devise || 'EUR'}`); continue; }
       p.ticker = q.symbol;
+      if (p.isin) ptf.isinTickers[p.isin] = q.symbol;
       if (EmeraudeCore.applyQuote(ptf, p, q, today).ok) online++;
+      const it = items.find(x => x.key === p.id);
+      if (it && it.long && debut && ptf.coursHist[q.symbol]) ptf.coursHist[q.symbol].depuis = debut;
     }
+    // Titres vendus : seulement leurs cours passés (pour l'historique du PEA)
+    items.filter(it => it.key.startsWith('isin:')).forEach(it => {
+      const q = cours[it.key];
+      if (!q || q.error || !q.symbol) return;
+      ptf.isinTickers[it.isin] = q.symbol;
+      EmeraudeCore.applyQuote(ptf, {}, q, today);
+      if (debut && ptf.coursHist[q.symbol]) ptf.coursHist[q.symbol].depuis = debut;
+    });
     const cac = cours['^FCHI'];
     if (cac && !cac.error && EmeraudeCore.applyQuote(ptf, ptf.cac40, cac, today).ok) {
       const closes = ptf.coursHist['^FCHI'].closes;
@@ -2945,38 +2977,138 @@ function ptfBuildPosCharts(pos) {
   buildArea(valHist, `ptf-va-${pos.id}`, `ptf-vl-${pos.id}`, `ptf-vd-${pos.id}`, 340, 110, 10);
 }
 
-// Valeur des titres jour par jour (DATA.portefeuille.valeurJour)
-const PTF_EVO = { jours: 90 };
-function ptfEvoSeries() {
-  const vj = DATA.portefeuille.valeurJour || {};
-  const from = EmeraudeCore.toISO(new Date(Date.now() - PTF_EVO.jours * 86400000));
-  return Object.keys(vj).filter(d => d >= from).sort().map(d => ({ d, v: vj[d] }));
+// Valeur des titres jour par jour, depuis l'ouverture du PEA (EmeraudeCore.peaHistorique : opérations × cours)
+const PTF_EVO_P = [['1m', '1 M', 30], ['3m', '3 M', 91], ['6m', '6 M', 182], ['1a', '1 an', 365], ['ytd', 'Cette année'], ['tout', 'Depuis l’ouverture']];
+let PTF_EVO_CACHE = null;
+function ptfEvoPrefs() { const s = SETTINGS.ptfEvo || {}; return { p: PTF_EVO_P.some(x => x[0] === s.p) ? s.p : 'tout', mode: s.mode === 'pea' ? 'pea' : 'titres', reference: s.reference !== false }; }
+function ptfEvoSet(k, v) { SETTINGS.ptfEvo = Object.assign(ptfEvoPrefs(), { [k]: v }); saveSettings(); renderPortefeuille(); }
+function ptfEvoData() {
+  const pf = DATA.portefeuille, today = todayISO(), pr = ptfEvoPrefs();
+  const def = PTF_EVO_P.find(x => x[0] === pr.p);
+  const from = pr.p === 'ytd' ? today.slice(0, 4) + '-01-01' : def && def[2] ? EmeraudeCore.toISO(new Date(Date.now() - def[2] * 864e5)) : '';
+  const pts = [];
+  let H = null;
+  if ((pf.operations || []).some(o => o.isin)) {
+    H = EmeraudeCore.peaHistorique(pf, today);
+    H.dates.forEach((d, i) => {
+      if (d < from || H.titres[i] == null) return;
+      const titres = d === today ? (pf.positions || []).reduce((s, x) => s + (+x.quantite || 0) * (+x.prixActuel || 0), 0) || H.titres[i] : H.titres[i];
+      pts.push({ d, t: titres, e: H.especes[i], i: H.investi[i], vers: H.versements[i], est: H.estime[i],
+        v: pr.mode === 'pea' ? titres + H.especes[i] : titres, r: pr.mode === 'pea' ? H.versements[i] : H.investi[i] });
+    });
+  } else {
+    const vj = pf.valeurJour || {};
+    Object.keys(vj).filter(d => d >= from).sort().forEach(d => pts.push({ d, t: vj[d], v: vj[d], r: null }));
+  }
+  const achats = new Set((pf.operations || []).filter(o => o.type === 'achat' || o.type === 'vente').map(o => EmeraudeCore.toISO(o.date)));
+  const versDates = new Set((pf.operations || []).filter(o => o.type === 'versement').map(o => EmeraudeCore.toISO(o.date)));
+  return PTF_EVO_CACHE = { H, pts, pr, achats, versDates };
 }
-function ptfSetEvo(n) { PTF_EVO.jours = n; renderPortefeuille(); }
+const ptfEvoNom = isin => { const pf = DATA.portefeuille; return ((pf.positions || []).find(x => x.isin === isin) || (pf.operations || []).find(o => o.isin === isin) || {}).nom || isin; };
 function ptfEvoCard() {
-  const s = ptfEvoSeries();
-  const first = s[0], last = s[s.length - 1];
-  const delta = first && last ? last.v - first.v : 0;
-  const btn = n => `<button class="btn ${PTF_EVO.jours === n ? 'btn-em' : 'btn-ghost'}" style="font-size:0.66rem;padding:3px 9px" onclick="ptfSetEvo(${n})">${n >= 365 ? Math.round(n / 365) + ' an' : n + ' j'}</button>`;
-  return `<div class="c3w" style="margin-bottom:14px"><div class="c3" style="padding:22px">
+  const { H, pts, pr } = ptfEvoData();
+  const n = pts.length, first = pts[0], last = pts[n - 1];
+  const btn = ([k, l]) => `<button class="btn ${pr.p === k ? 'btn-em' : 'btn-ghost'}" style="font-size:0.66rem;padding:3px 9px" onclick="ptfEvoSet('p','${k}')">${l}</button>`;
+  const modeBtn = (k, l, tip) => `<button class="btn ${pr.mode === k ? 'btn-em' : 'btn-ghost'}" style="font-size:0.66rem;padding:3px 9px" title="${tip}" onclick="ptfEvoSet('mode','${k}')">${l}</button>`;
+  const refNom = pr.mode === 'pea' ? 'Versements cumulés' : 'Montant investi en titres';
+  let kpis = '', notes = [];
+  if (n > 1) {
+    const delta = last.v - first.v, hi = pts.reduce((a, b) => (b.v > a.v ? b : a)), lo = pts.reduce((a, b) => (b.v < a.v ? b : a));
+    const gain = last.r != null ? last.v - last.r : null;
+    const k = (l, v, sub, col) => `<div style="background:rgba(2,14,25,0.55);border:1px solid rgba(16,185,129,0.10);border-radius:8px;padding:8px 10px;min-width:0">
+      <div style="font-size:0.55rem;letter-spacing:0.10em;text-transform:uppercase;color:var(--text-3);margin-bottom:3px">${l}</div>
+      <div style="font-size:0.95rem;font-weight:700;color:${col || 'var(--text-1)'}">${v}</div>${sub ? `<div style="font-size:0.62rem;color:var(--text-4);margin-top:2px">${sub}</div>` : ''}</div>`;
+    kpis = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px">
+      ${k(pr.mode === 'pea' ? 'Valeur du PEA' : 'Valeur des titres', fmt(last.v), EmeraudeCore.isoToFr(last.d))}
+      ${k('Variation sur la période', fmtVar(delta, ' €'), first.v ? fmtVar(delta / first.v * 100) + ' depuis le ' + EmeraudeCore.isoToFr(first.d) : '')}
+      ${gain != null ? k(pr.mode === 'pea' ? 'Gain vs versements' : 'Plus-value vs investi', fmtVar(gain, ' €'), last.r ? fmtVar(gain / last.r * 100) + ' · ' + refNom.toLowerCase() + ' ' + fmt(last.r) : '') : ''}
+      ${k('Plus haut', fmt(hi.v), EmeraudeCore.isoToFr(hi.d))}
+      ${k('Plus bas', fmt(lo.v), EmeraudeCore.isoToFr(lo.d))}
+    </div>`;
+  }
+  if (H) {
+    if (H.estime.some(Boolean) && (!first || first.d < H.debutOps))
+      notes.push(`Zone dorée (avant le ${EmeraudeCore.isoToFr(H.debutOps)}, début de l’historique importé) : estimée. Les titres achetés avant (${Object.keys(H.reliquat).map(i => `${impEsc(ptfEvoNom(i))} ×${H.reliquat[i]}`).join(', ') || '—'}) sont supposés détenus depuis l’ouverture du ${EmeraudeCore.isoToFr(H.start)}. Importez un historique plus ancien (export « HISTORY » du compte-titres) pour l’affiner.`);
+    const premier = H.dates[H.titres.findIndex(v => v != null)];
+    if (H.manquants.length) notes.push(`Cours ${premier ? `manquants avant le ${EmeraudeCore.isoToFr(premier)}` : 'manquants'} pour ${H.manquants.map(i => impEsc(ptfEvoNom(i))).join(', ')} : ils sont récupérés depuis le ${EmeraudeCore.isoToFr(H.start)} à la prochaine actualisation des cours (⧘ Actualiser, Google Drive connecté).`);
+  }
+  return `<div class="c3w" style="margin-bottom:14px"><div class="c3 no-tilt" style="padding:22px">
   <div class="shine"></div>
   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-    <div class="chart-hd" style="margin:0">Valeur des titres — jour par jour</div>
-    <div style="display:flex;gap:6px">${[30, 90, 365].map(btn).join('')}</div>
+    <div class="chart-hd" style="margin:0">${pr.mode === 'pea' ? 'Valeur du PEA' : 'Valeur des titres'} — jour par jour</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${H ? modeBtn('titres', 'Titres', 'Valeur des titres et montant investi en titres') + modeBtn('pea', 'PEA (titres + espèces)', 'Valeur totale du PEA et versements cumulés') + '<span style="width:8px"></span>' : ''}${PTF_EVO_P.map(btn).join('')}</div>
   </div>
-  ${s.length > 1 ? `
-  <div style="font-size:0.72rem;color:var(--text-3);margin-bottom:8px">${EmeraudeCore.isoToFr(first.d)} → ${EmeraudeCore.isoToFr(last.d)} · ${s.length} jours · ${fmtVar(delta, ' €')} (${fmtVar(first.v ? delta / first.v * 100 : 0)})</div>
-  <svg width="100%" height="130" viewBox="0 0 700 130" preserveAspectRatio="none" overflow="visible">
-    <defs><linearGradient id="ptf-evo-g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/><stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
-    </linearGradient></defs>
-    <path id="ptf-evo-a" fill="url(#ptf-evo-g)"/><path id="ptf-evo-l" fill="none" stroke="#10b981" stroke-width="2"/><circle id="ptf-evo-d" r="4" fill="#34d399"/>
-  </svg>` : `<div style="font-size:0.72rem;color:var(--text-3)">L’historique commence au premier jour où les cours sont récupérés ; ensuite une valeur par jour, y compris pour les jours où l’application n’a pas été ouverte.</div>`}
+  ${n > 1 ? `${kpis}
+  <div id="ptf-evo-box" style="position:relative;height:240px;margin:0 0 26px 54px" onmousemove="ptfEvoHover(event)" onmouseleave="ptfEvoHover(null)">
+    <div id="ptf-evo-svg" style="position:absolute;inset:0"></div>
+    <div id="ptf-evo-cur" style="position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.35);display:none;pointer-events:none"></div>
+    <div id="ptf-evo-tip" style="position:absolute;top:4px;display:none;pointer-events:none;background:rgba(2,14,25,0.95);border:1px solid rgba(16,185,129,0.35);border-radius:8px;padding:8px 10px;font-size:0.7rem;color:var(--text-2);white-space:nowrap;z-index:2;box-shadow:0 6px 20px rgba(0,0,0,.5)"></div>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.68rem;color:var(--text-3)">
+    <span><span style="display:inline-block;width:14px;height:3px;background:#10b981;vertical-align:middle;margin-right:5px"></span>${pr.mode === 'pea' ? 'Valeur du PEA' : 'Valeur des titres'}</span>
+    ${last.r != null ? `<span><span style="display:inline-block;width:14px;border-top:2px dashed #f0c040;vertical-align:middle;margin-right:5px"></span>${refNom}</span>` : ''}
+    ${H ? `<span><span style="display:inline-block;width:2px;height:9px;background:rgba(96,165,250,.8);vertical-align:middle;margin-right:5px"></span>Achat / vente</span><span><span style="display:inline-block;width:2px;height:9px;background:rgba(240,192,64,.9);vertical-align:middle;margin-right:5px"></span>Versement</span>` : ''}
+    ${H && H.estime.some(Boolean) ? `<span><span style="display:inline-block;width:12px;height:9px;background:rgba(240,192,64,0.14);vertical-align:middle;margin-right:5px"></span>Estimé</span>` : ''}
+  </div>
+  ${notes.map(x => `<div style="font-size:0.68rem;color:var(--text-4);margin-top:8px;line-height:1.5">${x}</div>`).join('')}`
+  : `<div style="font-size:0.72rem;color:var(--text-3);line-height:1.6">${H
+      ? `Historique reconstitué depuis le ${EmeraudeCore.isoToFr(H.start)} à partir de vos opérations : il manque les cours${H.manquants.length ? ` de ${H.manquants.map(i => impEsc(ptfEvoNom(i))).join(', ')}` : ''}. Ils sont récupérés à la prochaine actualisation (⧘ Actualiser, Google Drive connecté).`
+      : 'Importez l’historique des opérations du PEA (export « HISTORY » du compte-titres, page Imports) pour reconstituer la valeur jour par jour depuis l’ouverture ; sinon l’historique commence au premier jour où les cours sont récupérés.'}</div>`}
 </div></div>`;
 }
 function ptfBuildEvoChart() {
-  const s = ptfEvoSeries();
-  if (s.length > 1) buildArea(s.map(x => x.v), 'ptf-evo-a', 'ptf-evo-l', 'ptf-evo-d', 700, 130, 8);
+  const C = PTF_EVO_CACHE, box = document.getElementById('ptf-evo-box');
+  if (!C || !box || C.pts.length < 2) return;
+  const pts = C.pts, n = pts.length, W = 1000, Hh = 240;
+  const vals = pts.flatMap(p => p.r != null ? [p.v, p.r] : [p.v]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.05 || 1; lo -= pad; hi += pad;
+  // graduations « rondes »
+  const step0 = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(step0))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0);
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const x = i => i / (n - 1) * W, y = v => Hh - (v - lo) / (hi - lo) * Hh;
+  const line = k => pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`).join('');
+  let svg = `<svg width="100%" height="100%" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" style="position:absolute;inset:0;overflow:visible">
+    <defs><linearGradient id="ptf-evo-g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/><stop offset="100%" stop-color="#10b981" stop-opacity="0.02"/></linearGradient></defs>`;
+  const iEst = pts.findIndex(p => !p.est);
+  if (pts[0].est) svg += `<rect x="0" y="0" width="${x(iEst < 0 ? n - 1 : iEst).toFixed(1)}" height="${Hh}" fill="rgba(240,192,64,0.07)"/>`;
+  for (let v = lo; v <= hi + step / 2; v += step) svg += `<line x1="0" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="rgba(255,255,255,0.06)" vector-effect="non-scaling-stroke"/>`;
+  pts.forEach((p, i) => {
+    if (C.versDates.has(p.d)) svg += `<line x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${Hh - 14}" y2="${Hh}" stroke="rgba(240,192,64,0.9)" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    else if (C.achats.has(p.d)) svg += `<line x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${Hh - 9}" y2="${Hh}" stroke="rgba(96,165,250,0.8)" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  });
+  svg += `<path d="${line('v')}L${W},${Hh}L0,${Hh}Z" fill="url(#ptf-evo-g)"/>`;
+  if (pts[n - 1].r != null) svg += `<path d="${line('r')}" fill="none" stroke="#f0c040" stroke-width="1.6" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
+  svg += `<path d="${line('v')}" fill="none" stroke="#10b981" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+  // axes (HTML : pas de texte déformé)
+  const fk = v => Math.abs(step) >= 1000 ? (v / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' k€' : Math.round(v).toLocaleString('fr-FR') + ' €';
+  for (let v = lo; v <= hi + step / 2; v += step) svg += `<div style="position:absolute;left:-58px;width:52px;text-align:right;top:${(y(v) / Hh * 100).toFixed(2)}%;transform:translateY(-50%);font-size:0.6rem;color:var(--text-4)">${fk(v)}</div>`;
+  const span = (Date.parse(pts[n - 1].d) - Date.parse(pts[0].d)) / 864e5;
+  const fd = d => span > 300 ? d.slice(5, 7) + '/' + d.slice(2, 4) : d.slice(8, 10) + '/' + d.slice(5, 7);
+  const nt = Math.min(7, n);
+  for (let k = 0; k < nt; k++) {
+    const i = Math.round(k / (nt - 1) * (n - 1));
+    svg += `<div style="position:absolute;top:calc(100% + 6px);left:${(x(i) / W * 100).toFixed(2)}%;transform:translateX(${k === 0 ? '0' : k === nt - 1 ? '-100%' : '-50%'});font-size:0.6rem;color:var(--text-4);white-space:nowrap">${fd(pts[i].d)}</div>`;
+  }
+  document.getElementById('ptf-evo-svg').innerHTML = svg;
+}
+function ptfEvoHover(ev) {
+  const C = PTF_EVO_CACHE, box = document.getElementById('ptf-evo-box'), cur = document.getElementById('ptf-evo-cur'), tip = document.getElementById('ptf-evo-tip');
+  if (!C || !box || !cur || !tip) return;
+  if (!ev) { cur.style.display = tip.style.display = 'none'; return; }
+  const r = box.getBoundingClientRect(), f = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  const i = Math.round(f * (C.pts.length - 1)), p = C.pts[i], px = i / (C.pts.length - 1) * r.width;
+  const pea = C.pr.mode === 'pea';
+  const ligne = (l, v, col) => `<div style="display:flex;justify-content:space-between;gap:14px"><span style="color:var(--text-3)">${l}</span><strong style="color:${col || 'var(--text-1)'}">${v}</strong></div>`;
+  const ops = (DATA.portefeuille.operations || []).filter(o => EmeraudeCore.toISO(o.date) === p.d && ['achat', 'vente', 'versement', 'retrait', 'dividende'].includes(o.type));
+  tip.innerHTML = `<div style="font-weight:700;color:var(--em-bright);margin-bottom:4px">${EmeraudeCore.isoToFr(p.d)}${p.est ? ' <span style="color:var(--gold-base);font-weight:400">· estimé</span>' : ''}</div>`
+    + (pea ? ligne('Valeur du PEA', fmt(p.v)) + ligne('dont titres', fmt(p.t)) + ligne('dont espèces', fmt(p.e)) : ligne('Valeur des titres', fmt(p.v)))
+    + (p.r != null ? ligne(pea ? 'Versements cumulés' : 'Investi en titres', fmt(p.r)) + ligne(pea ? 'Gain' : 'Plus-value', fmtVar(p.v - p.r, ' €')) : '')
+    + (ops.length ? `<div style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);color:var(--text-3)">${ops.slice(0, 5).map(o => `${impEsc((PTF_OP_LABELS[o.type] || [o.type])[0])} ${o.quantite && o.type !== 'versement' ? o.quantite + ' × ' : ''}${impEsc(String(o.nom || '').slice(0, 26))} · ${fmt(Math.abs(+o.total || 0))}`).join('<br>')}${ops.length > 5 ? `<br>+ ${ops.length - 5} autre(s)` : ''}</div>` : '');
+  cur.style.display = tip.style.display = 'block';
+  cur.style.left = px + 'px';
+  const tw = tip.offsetWidth;
+  tip.style.left = (px + 12 + tw > r.width ? Math.max(0, px - 12 - tw) : px + 12) + 'px';
 }
 
 // ── PEA edit ─────────────────────────────────────────────────────────────────
@@ -2987,7 +3119,12 @@ function ptfSavePea() {
   pea.num          = document.getElementById('pea-num').value.trim()       || pea.num;
   pea.dateOuverture= document.getElementById('pea-date').value.trim()      || pea.dateOuverture;
   pea.soldeEspeces = parseFloat(document.getElementById('pea-especes').value) || pea.soldeEspeces;
-  pea.versementsCumul = Math.max(0, parseFloat(document.getElementById('pea-versements').value) || 0);
+  const vers = Math.max(0, parseFloat(document.getElementById('pea-versements').value) || 0);
+  if (Math.abs(vers - EmeraudeCore.peaVersements(DATA.portefeuille)) > 0.005) {
+    // nouveau cumul saisi : il vaut à aujourd'hui (les versements importés ensuite s'y ajoutent)
+    pea.versementsCumules = vers + (+pea.retraitsCumules || 0); pea.versementsDate = EmeraudeCore.isoToFr(todayISO());
+  }
+  pea.versementsCumul = vers;
   pea.plafond      = parseFloat(document.getElementById('pea-plafond').value) || pea.plafond;
   PTF_UI.editPea = false;
   saveData(); renderPortefeuille();
@@ -3105,6 +3242,60 @@ function ptfAddOp() {
 // Libellés des types d'opérations du PEA [nom, affichage]
 const PTF_OP_LABELS = { achat: ['Achat', '\u2b06\ufe0e Achat'], vente: ['Vente', '\u2b07\ufe0e Vente'], dividende: ['Dividende / coupon', '\u2295 Dividende'],
   taxe: ['Taxe (TTF)', '🧾 Taxe TTF'], versement: ['Versement', '💶 Versement'], retrait: ['Retrait', '↗ Retrait'], remb_frais: ['Remboursement de frais', '↩ Remb. frais'], autre: ['Autre', '• Autre'] };
+
+// ── Historique des opérations du portefeuille : tri et filtres (préférences dans SETTINGS) ──
+const PTF_TRI_CLES = { date: 'Date', type: 'Type', nom: 'Titre', isin: 'ISIN', quantite: 'Quantité', prix: 'Prix unitaire', frais: 'Frais', total: 'Montant (signé)', abs: 'Montant (valeur absolue)' };
+function ptfOpsTri() {
+  const t = SETTINGS.ptfOpsTri || {};
+  return { cle: PTF_TRI_CLES[t.cle] ? t.cle : 'date', sens: t.sens === 'asc' ? 'asc' : 'desc', type: t.type || '', annee: t.annee || '' };
+}
+function ptfOpsTrier(ops, tri) {
+  const iso = o => EmeraudeCore.toISO(o.date) || '';
+  const val = o => {
+    switch (tri.cle) {
+      case 'type': return (PTF_OP_LABELS[o.type] || [o.type || ''])[0];
+      case 'nom': return String(o.nom || '');
+      case 'isin': return String(o.isin || '');
+      case 'quantite': return +o.quantite || 0;
+      case 'prix': return +o.prix || 0;
+      case 'frais': return +o.frais || 0;
+      case 'total': return +o.total || 0;
+      case 'abs': return Math.abs(+o.total || 0);
+      default: return iso(o);
+    }
+  };
+  const s = tri.sens === 'asc' ? 1 : -1;
+  return ops.map((o, i) => ({ o, i, v: val(o), d: iso(o) })).sort((a, b) => {
+    const c = typeof a.v === 'number' ? a.v - b.v : a.v.localeCompare(b.v, 'fr', { sensitivity: 'base' });
+    if (c) return c * s;
+    // À égalité : opération la plus récente d'abord, puis ordre d'origine
+    return b.d.localeCompare(a.d) || a.i - b.i;
+  }).map(x => x.o);
+}
+function ptfOpsSetTri(cle) {
+  const t = ptfOpsTri();
+  if (t.cle === cle) t.sens = t.sens === 'asc' ? 'desc' : 'asc';
+  else { t.cle = cle; t.sens = (cle === 'date' || ['quantite', 'prix', 'frais', 'total', 'abs'].includes(cle)) ? 'desc' : 'asc'; }
+  SETTINGS.ptfOpsTri = t; saveSettings(); renderPortefeuille();
+}
+function ptfOpsSet(k, v) { const t = ptfOpsTri(); t[k] = v; SETTINGS.ptfOpsTri = t; saveSettings(); renderPortefeuille(); }
+// Recherche texte : filtre les lignes affichées sans re-rendu (garde le focus du champ)
+function ptfOpsChercher(q) {
+  PTF_UI.opsRecherche = q;
+  const n = EmeraudeCore.normText ? (s => EmeraudeCore.normText(s).toLowerCase()) : (s => String(s).toLowerCase());
+  const m = n(q.trim());
+  let vis = 0, tot = 0;
+  document.querySelectorAll('#ptf-ops-body tr[data-op]').forEach(tr => {
+    const ok = !m || n(tr.dataset.txt || '').includes(m);
+    tr.style.display = ok ? '' : 'none';
+    if (ok) { vis++; tot += +tr.dataset.total || 0; }
+  });
+  const c = document.getElementById('ptf-ops-compte');
+  if (c) c.innerHTML = ptfOpsCompte(vis, tot);
+}
+function ptfOpsCompte(n, tot) {
+  return `${n} opération${n > 1 ? 's' : ''} · solde <strong style="color:${tot >= 0 ? 'var(--em-glow)' : '#f87171'}">${tot >= 0 ? '+' : '−'}${fmt(Math.abs(tot))}</strong>`;
+}
 // ── Ordres d'achat par an (objectif réglable, 12 par défaut) ─────────────────
 function ptfSetObjectifOrdres(v) {
   const n = Math.round(+v);
@@ -3165,7 +3356,7 @@ function renderPortefeuille() {
   const pvLatente    = soldesTitres - coutTotal;
   const pvPct        = coutTotal ? pvLatente / coutTotal * 100 : 0;
   const totalPEA     = soldesTitres + pea.soldeEspeces;
-  const versementsCumul = Math.max(0, +pea.versementsCumul || 0);
+  const versementsCumul = Math.max(0, EmeraudeCore.peaVersements(DATA.portefeuille) || +pea.versementsCumul || 0);
   const plafond = Math.max(0, +pea.plafond || 0);
   const plafondPctRaw = plafond > 0 ? (versementsCumul / plafond * 100) : 0;
   const titresPct    = totalPEA ? (soldesTitres / totalPEA * 100).toFixed(1) : '0.0';
@@ -3185,6 +3376,10 @@ function renderPortefeuille() {
   const cacPath = cPts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join(' ');
 
   const selPos = PTF_UI.posId  ? pos.find(p => p.id === PTF_UI.posId)  : null;
+  const opsTri = ptfOpsTri();
+  const opsTypes = [...new Set((ptf.operations || []).map(o => o.type).filter(Boolean))].sort((a, b) => (PTF_OP_LABELS[a] || [a])[0].localeCompare((PTF_OP_LABELS[b] || [b])[0], 'fr'));
+  const opsAnnees = [...new Set((ptf.operations || []).map(o => (EmeraudeCore.toISO(o.date) || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  const opsListe = ptfOpsTrier((ptf.operations || []).filter(o => (!opsTri.type || o.type === opsTri.type) && (!opsTri.annee || (EmeraudeCore.toISO(o.date) || '').startsWith(opsTri.annee))), opsTri);
   const eBTN   = `style="background:none;border:none;cursor:pointer;padding:3px 6px;font-size:0.85rem;color:var(--text-3);opacity:0.7" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7"`;
 
   root.innerHTML = `
@@ -3437,20 +3632,31 @@ ${ptfEvoCard()}
 ${ptfOrdresCard()}
 
 <!-- Op\u00e9rations ────────────────────────────────────────────────────────────── -->
-<div class="c3w"><div class="c3" style="padding:22px">
+<div class="c3w"><div class="c3 no-tilt" style="padding:22px">
   <div class="shine"></div>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
     <div class="chart-hd" style="margin:0">Historique des op\u00e9rations</div>
     <button class="btn btn-ghost" style="font-size:0.72rem;padding:5px 12px" onclick="ptfToggleAddOp()">${PTF_UI.showAddOp ? '\u2715 Annuler' : '+ Op\u00e9ration'}</button>
   </div>
+  <div class="ptf-ops-bar">
+    <span>Trier par</span>
+    <select onchange="ptfOpsSet('cle', this.value)">${Object.entries(PTF_TRI_CLES).map(([k, l]) => `<option value="${k}"${opsTri.cle === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+    <button class="btn btn-ghost" style="padding:4px 10px;font-size:0.72rem" onclick="ptfOpsSet('sens', '${opsTri.sens === 'asc' ? 'desc' : 'asc'}')" title="Inverser l\u2019ordre">${opsTri.sens === 'asc' ? '\u2191 Croissant' : '\u2193 D\u00e9croissant'}</button>
+    <span style="margin-left:6px">Type</span>
+    <select onchange="ptfOpsSet('type', this.value)"><option value="">Tous</option>${opsTypes.map(k => `<option value="${k}"${opsTri.type === k ? ' selected' : ''}>${impEsc((PTF_OP_LABELS[k] || [k])[0])}</option>`).join('')}</select>
+    <span style="margin-left:6px">Ann\u00e9e</span>
+    <select onchange="ptfOpsSet('annee', this.value)"><option value="">Toutes</option>${opsAnnees.map(a => `<option value="${a}"${opsTri.annee === a ? ' selected' : ''}>${a}</option>`).join('')}</select>
+    <input type="search" placeholder="Rechercher (titre, ISIN, ticker\u2026)" value="${impEsc(PTF_UI.opsRecherche || '')}" oninput="ptfOpsChercher(this.value)" style="flex:1;min-width:160px">
+    <span id="ptf-ops-compte" style="margin-left:auto">${ptfOpsCompte(opsListe.length, opsListe.reduce((s, o) => s + (+o.total || 0), 0))}</span>
+  </div>
   <table class="ptf-ops-table">
     <thead><tr>
-      <th>Date</th><th>Op\u00e9ration</th><th>Titre</th><th>ISIN</th>
-      <th style="text-align:right">Qt\u00e9</th><th style="text-align:right">Prix unit.</th>
-      <th style="text-align:right">Frais</th><th style="text-align:right">Total</th>
+      ${[['date', 'Date'], ['type', 'Op\u00e9ration'], ['nom', 'Titre'], ['isin', 'ISIN'], ['quantite', 'Qt\u00e9', 1], ['prix', 'Prix unit.', 1], ['frais', 'Frais', 1], ['total', 'Total', 1]].map(([k, l, d]) => {
+        const on = opsTri.cle === k || (k === 'total' && opsTri.cle === 'abs');
+        return `<th class="tri${on ? ' actif' : ''}"${d ? ' style="text-align:right"' : ''} onclick="ptfOpsSetTri('${k}')" title="Trier par ${l}">${l}${on ? (opsTri.sens === 'asc' ? ' \u2191' : ' \u2193') : ''}</th>`; }).join('')}
       <th></th>
     </tr></thead>
-    <tbody>
+    <tbody id="ptf-ops-body">
     ${PTF_UI.showAddOp ? `
     <tr class="ptf-edit-row">
       <td colspan="9">
@@ -3476,7 +3682,8 @@ ${ptfOrdresCard()}
         </div>
       </td>
     </tr>` : ''}
-    ${ptf.operations.map(op => {
+    ${opsListe.length ? '' : `<tr><td colspan="9" style="text-align:center;color:var(--text-4);padding:18px 0">${ptf.operations.length ? 'Aucune op\u00e9ration pour ce filtre' : 'Aucune op\u00e9ration enregistr\u00e9e'}</td></tr>`}
+    ${opsListe.map(op => {
       const isEdit = PTF_UI.editOp === op.id;
       return isEdit ? `
       <tr class="ptf-edit-row">
@@ -3506,7 +3713,7 @@ ${ptfOrdresCard()}
           </div>
         </td>
       </tr>` : `
-      <tr>
+      <tr data-op="${impEsc(op.id)}" data-total="${+op.total || 0}" data-txt="${impEsc([op.nom, op.ticker, op.isin, (PTF_OP_LABELS[op.type] || [op.type])[0], op.ref].filter(Boolean).join(' '))}">
         <td style="color:var(--text-3);white-space:nowrap">${EmeraudeCore.isoToFr(EmeraudeCore.toISO(op.date)) || op.date}</td>
         <td><span class="op-${op.type}" style="white-space:nowrap">${(PTF_OP_LABELS[op.type] || ['', op.type])[1]}</span></td>
         <td>${impEsc(op.nom)}${op.ticker && op.ticker !== '—' ? `<span class="ticker-badge">${impEsc(op.ticker)}</span>` : ''}${op.estime ? ' <span style="font-size:0.6rem;color:var(--gold-base)" title="Ordre exécuté pas encore réglé : montant estimé">estimé</span>' : ''}</td>
@@ -3527,6 +3734,7 @@ ${ptfOrdresCard()}
 `;
 
   root.querySelectorAll('.c3').forEach(attachTilt);
+  if (PTF_UI.opsRecherche) ptfOpsChercher(PTF_UI.opsRecherche);
   ptfBuildEvoChart();
   if (selPos) ptfBuildPosCharts(selPos);
 }
@@ -4267,7 +4475,9 @@ const EmeraudeCore = (() => {
     const byIsin = Object.fromEntries(pf.positions.map(p => [p.isin, p]));
     const newIsins = new Set(res.positions.map(p => p.isin));
     pf.positions = res.positions.map((p, i) => Object.assign({ id: `pos-${a.importId}-${i}`, secteur: '', devise: 'EUR' }, byIsin[p.isin] || {}, p));
+    if (!pf.pea.versementsDate && pf.pea.dateEdition && (+pf.pea.versementsCumules || +pf.pea.versementsCumul)) pf.pea.versementsDate = pf.pea.dateEdition;
     Object.entries(res.summary || {}).forEach(([k, v]) => { if (v != null) pf.pea[k] = v; });
+    if (res.date && res.summary && res.summary.versementsCumules != null) pf.pea.versementsDate = isoToFr(res.date);
     if (res.date) pf.pea.dateEdition = isoToFr(res.date);
     return { kind: 'pea', cible: 'Portefeuille › PEA', positions: res.positions.length,
       nouvelles: res.positions.filter(p => !byIsin[p.isin]).map(p => p.nom),
@@ -4990,10 +5200,7 @@ const EmeraudeCore = (() => {
     const out = [];
     const pf = data.portefeuille || {}, pea = pf.pea || {};
     const titres = (pf.positions || []).reduce((s, x) => s + (+x.quantite || 0) * (+x.prixActuel || 0), 0);
-    const edition = toISO(pea.dateEdition) || '';
-    const versOps = (pf.operations || []).filter(o => toISO(o.date) > edition).reduce((s, o) =>
-      s + (o.type === 'versement' ? 1 : o.type === 'retrait' ? -1 : 0) * Math.abs(+o.total || 0), 0);
-    const versements = round2((+pea.versementsCumules || +pea.versementsCumul || 0) - (+pea.retraitsCumules || 0) + versOps);
+    const versements = peaVersements(pf);
     if (titres || versements) {
       const pru = (pf.positions || []).reduce((s, x) => s + (+x.quantite || 0) * (+x.prixMoyenAchat || +x.pru || 0), 0);
       out.push({ k: 'portefeuille', nom: pea.nom ? 'PEA' : 'Portefeuille', apports: versements, valeur: round2(titres + (+pea.soldeEspeces || 0)),
@@ -5586,9 +5793,113 @@ const EmeraudeCore = (() => {
       for (const p of pos) { const c = closeAt(pf.coursHist && pf.coursHist[p.ticker], d); if (c == null) { ok = false; break; } v += p.quantite * c; }
       if (ok) { vj[d] = round2(v); added++; }
     }
+    if ((pf.operations || []).some(o => o.isin)) {
+      const h = peaHistorique(pf, today);
+      h.dates.forEach((dd, i) => { if (dd < today && h.titres[i] != null) { if (vj[dd] == null) added++; vj[dd] = h.titres[i]; } });
+    }
     vj[today] = round2(pos.reduce((s, p) => s + p.quantite * (+p.prixActuel || 0), 0));
     pf.valeurJourProvisoire = today;
     return added;
+  }
+  // Versements nets du PEA aujourd'hui : cumul du relevé (pea.versementsCumules, à la date
+  // pea.versementsDate, à défaut dateEdition) + versements / retraits importés après cette date.
+  const peaVSigne = o => (o.type === 'versement' ? 1 : o.type === 'retrait' ? -1 : 0) * Math.abs(+o.total || 0);
+  function peaVersements(pf) {
+    const pea = (pf || {}).pea || {}, ops = (pf || {}).operations || [];
+    const releve = (+pea.versementsCumules || +pea.versementsCumul || 0) - (+pea.retraitsCumules || 0);
+    if (!releve) return round2(ops.reduce((s, o) => s + peaVSigne(o), 0));
+    const date = toISO(pea.versementsDate) || toISO(pea.dateEdition) || '';
+    return round2(releve + ops.filter(o => (toISO(o.date) || '') > date).reduce((s, o) => s + peaVSigne(o), 0));
+  }
+  // ── PEA reconstitué jour par jour depuis l'ouverture ──
+  // Quantités : opérations importées (achats / ventes) ; ce que les positions détiennent en plus
+  // (« reliquat », acheté avant le début de l'historique exporté) est supposé détenu depuis
+  // l'ouverture → jours marqués estimés. Espèces et versements reconstitués à rebours depuis les
+  // valeurs actuelles. Titre sans cours ce jour-là → valeur du jour inconnue (null).
+  // Retour : { dates, titres, especes, investi, versements, estime, start, debutOps, ouverture,
+  //           manquants: [isin], reliquat: {isin: qte}, symboles: [ticker] }
+  function peaHistorique(pf, today) {
+    pf = pf || {};
+    const pea = pf.pea || {};
+    const ops = (pf.operations || []).map(o => Object.assign({}, o, { d: toISO(o.date) }))
+      .filter(o => o.d && o.d <= today).sort((a, b) => a.d.localeCompare(b.d));
+    const pos = (pf.positions || []).filter(x => +x.quantite > 0);
+    const map = Object.assign({}, pf.isinTickers || {});
+    pos.forEach(x => { if (x.isin && x.ticker) map[x.isin] = x.ticker; });
+    const sym = isin => map[isin] || '';
+    const net = {}, cout = {};
+    ops.forEach(o => {
+      if (!o.isin) return;
+      const q = +o.quantite || 0;
+      if (o.type === 'achat') { net[o.isin] = (net[o.isin] || 0) + q; cout[o.isin] = (cout[o.isin] || 0) + Math.abs(+o.total || 0); }
+      if (o.type === 'vente') net[o.isin] = (net[o.isin] || 0) - q;
+    });
+    const reliquat = {}, coutReliquat = {};
+    pos.forEach(x => {
+      const k = x.isin || x.ticker; if (!k) return;
+      const r = round2(+x.quantite - (net[k] || 0));
+      if (r > 0.0001) { reliquat[k] = r; coutReliquat[k] = round2(r * (+x.prixMoyenAchat || +x.pru || 0)); if (!x.isin && x.ticker) map[k] = x.ticker; }
+    });
+    const vSigne = peaVSigne;
+    const vNow = peaVersements(pf);
+    const vAvant = Math.max(0, round2(vNow - ops.reduce((s, o) => s + vSigne(o), 0)));
+    const debutOps = ops.length ? ops[0].d : today;
+    const ouverture = toISO(pea.datePremiereVersement) || toISO(pea.dateOuverture) || '';
+    const avant = Object.keys(reliquat).length > 0 || vAvant > 0;
+    const start = avant && ouverture && ouverture < debutOps ? ouverture : debutOps;
+    // Curseurs de cours (dates triées) : dernière clôture ≤ jour
+    const curs = {};
+    const coursDe = (s, d) => {
+      const h = pf.coursHist && pf.coursHist[s];
+      if (!h || !h.closes) return null;
+      let c = curs[s];
+      if (!c) c = curs[s] = { k: Object.keys(h.closes).sort(), i: -1 };
+      while (c.i + 1 < c.k.length && c.k[c.i + 1] <= d) c.i++;
+      return c.i >= 0 ? h.closes[c.k[c.i]] : null;
+    };
+    const qte = Object.assign({}, reliquat), coutCour = Object.assign({}, coutReliquat);
+    let investi = Object.values(coutReliquat).reduce((s, v) => s + v, 0), vers = vAvant;
+    let especes = (+pea.soldeEspeces || 0) - ops.reduce((s, o) => s + (+o.total || 0), 0);
+    const out = { dates: [], titres: [], especes: [], investi: [], versements: [], estime: [], start, debutOps, ouverture, reliquat, manquants: [], symboles: [] };
+    const manq = new Set();
+    let j = 0;
+    for (let d = start; d <= today; d = addDays(d, 1)) {
+      for (; j < ops.length && ops[j].d <= d; j++) {
+        const o = ops[j], q = +o.quantite || 0;
+        if (o.isin && o.type === 'achat') { qte[o.isin] = (qte[o.isin] || 0) + q; coutCour[o.isin] = (coutCour[o.isin] || 0) + Math.abs(+o.total || 0); investi += Math.abs(+o.total || 0); }
+        if (o.isin && o.type === 'vente') {
+          // coût retiré au prorata (coût moyen de la ligne)
+          const avantQ = qte[o.isin] || 0, part = avantQ > 0 ? (coutCour[o.isin] || 0) * Math.min(1, q / avantQ) : 0;
+          coutCour[o.isin] = (coutCour[o.isin] || 0) - part; investi -= part;
+          qte[o.isin] = Math.max(0, avantQ - q);
+        }
+        vers += vSigne(o);
+        especes += +o.total || 0;
+      }
+      let v = 0, ok = true;
+      for (const k in qte) {
+        if (!(qte[k] > 0)) continue;
+        const c = sym(k) ? coursDe(sym(k), d) : null;
+        if (c == null) { ok = false; manq.add(k); continue; }
+        v += qte[k] * c;
+      }
+      out.dates.push(d);
+      out.titres.push(ok ? round2(v) : null);
+      out.especes.push(round2(especes));
+      out.investi.push(round2(investi));
+      out.versements.push(d >= (ouverture || start) ? round2(vers) : 0);
+      out.estime.push(d < debutOps && avant);
+    }
+    out.manquants = [...manq];
+    out.symboles = [...new Set(Object.keys(net).concat(Object.keys(reliquat)).map(sym).filter(Boolean))];
+    return out;
+  }
+  // Isin à suivre : titres détenus ou passés par le PEA (pour récupérer leurs cours)
+  function peaIsins(pf) {
+    const s = new Set();
+    ((pf || {}).operations || []).forEach(o => { if (o.isin && (o.type === 'achat' || o.type === 'vente')) s.add(o.isin); });
+    ((pf || {}).positions || []).forEach(x => { if (x.isin) s.add(x.isin); });
+    return [...s];
   }
   // Données reçues d'un autre appareil (dst) : on garde les cours et valeurs journalières connus ici
   // seulement (src), et le cours le plus récent de chaque position
@@ -5615,7 +5926,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese, PATRIMOINE_CLASSES, finsDeMois, historiquePatrimoine, instantane, analyseVariations, classerCompte, performanceApports, projeterPatrimoine, moisAtteinte, detecterSalaires };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, peaHistorique, peaIsins, peaVersements, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese, PATRIMOINE_CLASSES, finsDeMois, historiquePatrimoine, instantane, analyseVariations, classerCompte, performanceApports, projeterPatrimoine, moisAtteinte, detecterSalaires };
 })();
 // IMPORT_CORE_END
 
@@ -12068,7 +12379,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261112-1431-7bf2628';
+const APP_BUILD = '20261112-1751-8c16da0';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
