@@ -629,6 +629,11 @@ html, body {
 .hero-lbl {
   font-size: 0.7rem; letter-spacing: 0.35em; text-transform: uppercase; color: var(--text-3);
 }
+.hero-prets {
+  margin-top: 8px; background: none; border: 1px dashed rgba(148,163,184,0.35); border-radius: 20px;
+  padding: 3px 11px; font-size: 0.72rem; color: var(--text-3); cursor: pointer; font-family: inherit;
+}
+.hero-prets:hover { color: var(--text-1); border-color: rgba(16,185,129,0.5); }
 .hero-badge {
   display: inline-flex; align-items: center; gap: 5px; margin-top: 10px;
   background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.22);
@@ -1658,9 +1663,10 @@ html, body {
             <svg class="orn br" viewBox="0 0 36 36"><path d="M2 34 L2 9 Q2 2 9 2 L34 2" stroke="rgba(218,165,32,0.75)" stroke-width="1.4" fill="none"/><path d="M6 34 L6 13 Q6 6 13 6 L34 6" stroke="rgba(16,185,129,0.4)" stroke-width="0.7" fill="none"/><circle cx="9" cy="9" r="2.5" fill="none" stroke="rgba(218,165,32,0.6)" stroke-width="0.8"/></svg>
 
             <div>
-              <div class="hero-lbl">Patrimoine Net Total</div>
+              <div class="hero-lbl" id="heroLbl">Patrimoine Net Total</div>
               <div class="hero-val" id="heroVal">--</div>
               <div class="hero-badge" id="heroBadge">+2.4% ce mois</div>
+              <div><button type="button" class="hero-prets" id="heroPrets" style="display:none" onclick="togglePatrimoinePrets()" title="Afficher le patrimoine avec ou sans le restant dû des prêts"></button></div>
             </div>
 
             <div style="text-align:right; position:relative; z-index:1">
@@ -2968,6 +2974,9 @@ function ptfAddOp() {
   saveData(); renderPortefeuille();
 }
 
+// Libellés des types d'opérations du PEA [nom, affichage]
+const PTF_OP_LABELS = { achat: ['Achat', '\u2b06\ufe0e Achat'], vente: ['Vente', '\u2b07\ufe0e Vente'], dividende: ['Dividende / coupon', '\u2295 Dividende'],
+  taxe: ['Taxe (TTF)', '🧾 Taxe TTF'], versement: ['Versement', '💶 Versement'], retrait: ['Retrait', '↗ Retrait'], remb_frais: ['Remboursement de frais', '↩ Remb. frais'], autre: ['Autre', '• Autre'] };
 // ── Ordres d'achat par an (objectif réglable, 12 par défaut) ─────────────────
 function ptfSetObjectifOrdres(v) {
   const n = Math.round(+v);
@@ -3176,7 +3185,7 @@ ${ptfEvoCard()}
       const edit = PTF_UI.editPos === p.id;
       return `
       <tr class="pos-row${open?' sel':''}" onclick="${edit?'':'selectPos(\''+p.id+'\')'}">
-        <td><strong>${p.nom}</strong><span class="ticker-badge">${p.ticker}</span></td>
+        <td><strong>${impEsc(p.nom)}</strong>${p.ticker ? `<span class="ticker-badge">${impEsc(p.ticker)}</span>` : ''}</td>
         <td style="color:var(--text-3);font-family:monospace;font-size:0.70rem">${p.isin}</td>
         <td class="tdr">${fmtE(p.prixActuel)}&thinsp;\u20ac</td>
         <td class="tdr">${p.quantite}</td>
@@ -3196,7 +3205,7 @@ ${ptfEvoCard()}
           <div style="display:grid;grid-template-columns:2fr 1.5fr 1fr 1fr;gap:8px;margin-bottom:8px">
             <div><div style="font-size:0.56rem;color:var(--text-3);margin-bottom:3px">Nom</div><input id="ep-nom-${p.id}" value="${p.nom}"></div>
             <div><div style="font-size:0.56rem;color:var(--text-3);margin-bottom:3px">ISIN</div><input id="ep-isin-${p.id}" value="${p.isin}"></div>
-            <div><div style="font-size:0.56rem;color:var(--text-3);margin-bottom:3px">Ticker</div><input id="ep-ticker-${p.id}" value="${p.ticker}"></div>
+            <div><div style="font-size:0.56rem;color:var(--text-3);margin-bottom:3px">Ticker</div><input id="ep-ticker-${p.id}" value="${impEsc(p.ticker || '')}"></div>
             <div><div style="font-size:0.56rem;color:var(--text-3);margin-bottom:3px">Secteur</div><input id="ep-secteur-${p.id}" value="${p.secteur||''}"></div>
           </div>
           <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:10px">
@@ -3232,7 +3241,7 @@ ${ptfEvoCard()}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px">
             <div>
-              <div style="font-size:0.60rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:8px">Cours historique (${p.ticker})</div>
+              <div style="font-size:0.60rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-3);margin-bottom:8px">Cours historique (${impEsc(p.ticker || p.isin || '')})</div>
               <svg id="ptf-ps-${p.id}" width="100%" height="110" viewBox="0 0 340 110" preserveAspectRatio="none" overflow="visible">
                 <defs><linearGradient id="ptf-pg-${p.id}" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/>
@@ -3370,9 +3379,9 @@ ${ptfOrdresCard()}
         </td>
       </tr>` : `
       <tr>
-        <td style="color:var(--text-3)">${op.date}</td>
-        <td><span class="op-${op.type}">${op.type==='achat'?'\u2b06\ufe0e Achat':op.type==='vente'?'\u2b07\ufe0e Vente':'\u2295 Dividende'}</span></td>
-        <td>${op.nom}<span class="ticker-badge">${op.ticker}</span></td>
+        <td style="color:var(--text-3);white-space:nowrap">${EmeraudeCore.isoToFr(EmeraudeCore.toISO(op.date)) || op.date}</td>
+        <td><span class="op-${op.type}" style="white-space:nowrap">${(PTF_OP_LABELS[op.type] || ['', op.type])[1]}</span></td>
+        <td>${impEsc(op.nom)}${op.ticker && op.ticker !== '—' ? `<span class="ticker-badge">${impEsc(op.ticker)}</span>` : ''}${op.estime ? ' <span style="font-size:0.6rem;color:var(--gold-base)" title="Ordre exécuté pas encore réglé : montant estimé">estimé</span>' : ''}</td>
         <td style="color:var(--text-3);font-family:monospace;font-size:0.68rem">${op.isin||'\u2014'}</td>
         <td style="text-align:right">${op.quantite||'\u2014'}</td>
         <td style="text-align:right">${op.prix?fmtE(op.prix)+'\u00a0\u20ac':'\u2014'}</td>
@@ -3424,7 +3433,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // IMPORT_CORE_START — aucun accès au DOM ni à DATA global : les données sont passées en
 // paramètre. Ce bloc est extrait et testé par tests/run-tests.js (node tests/run-tests.js).
 const EmeraudeCore = (() => {
-  const SCHEMA_VERSION = 6;
+  const SCHEMA_VERSION = 7;
 
   // ── Texte ───────────────────────────
   // Réparation du « double encodage » (UTF-8 relu en Windows-1252 : « Ã‰ » au lieu de « É »)
@@ -3698,9 +3707,9 @@ const EmeraudeCore = (() => {
 
   IMPORTERS.push({
     id: 'pea-positions', label: 'PEA — valorisation détaillée du contrat (CSV)', kind: 'pea',
-    detect: f => f.rows && findHeader(f.rows, ['Nom', 'ISIN', 'Quantité']) ? 0.95 : 0,
+    detect: f => f.rows && findHeader(f.rows, ['Nom', 'ISIN', 'Quantité', 'Cours', 'Valorisation en euro']) ? 0.95 : 0,
     parse(f) {
-      const h = findHeader(f.rows, ['Nom', 'ISIN', 'Quantité']);
+      const h = findHeader(f.rows, ['Nom', 'ISIN', 'Quantité', 'Cours', 'Valorisation en euro']);
       const c = n => h.col(n);
       const top = f.rows.slice(0, h.index).map(r => r.join(' ')).join('\n');
       const amt = '([-+]?[\\d\\s.,\\u00A0\\u202F]+)';
@@ -3723,6 +3732,83 @@ const EmeraudeCore = (() => {
     }
   });
 
+  // ── PEA : historique des opérations et liste des ordres (export CSV du compte-titres) ──
+  // Opération du portefeuille : { id, date (AAAA-MM-JJ), type, nom, ticker, isin, quantite, prix, frais, total (signé), ref, estime, importId }
+  const PEA_TYPES = [[/ACHAT/, 'achat'], [/VENTE/, 'vente'], [/COUPON|DIVIDENDE/, 'dividende'], [/TAXE/, 'taxe'],
+    [/REMBOURSEMENT.*(PLAF|FRAIS)|T\.? ?PERCU/, 'remb_frais'], [/VERSEMENT/, 'versement'], [/RETRAIT/, 'retrait']];
+  const peaType = s => { const u = String(s || '').toUpperCase(); const x = PEA_TYPES.find(([re]) => re.test(u)); return x ? x[1] : 'autre'; };
+  const peaEntete = top => ({ date: toISO((top.match(/Edition du\s*([\d\/]+)/i) || [])[1]), contrat: (top.match(/Contrat num[eé]ro\s*:\s*(\w+)/i) || [])[1] || '' });
+  IMPORTERS.push({
+    id: 'pea-historique', label: 'PEA — historique des opérations (CSV)', kind: 'peaOps',
+    detect: f => f.rows && findHeader(f.rows, ['Opération', 'Valeur', 'ISIN', 'Quantité', 'Montant Net']) ? 0.96 : 0,
+    parse(f) {
+      const h = findHeader(f.rows, ['Opération', 'Valeur', 'ISIN', 'Quantité', 'Montant Net']);
+      const c = n => h.col(n), iT = c('Opération'), iN = c('Valeur'), iI = c('ISIN'), iQ = c('Quantité'), iM = c('Montant Net'), iF = c('Frais'), iD = c('Date');
+      const ops = [];
+      for (const r of f.rows.slice(h.index + 1)) {
+        const date = toISO(r[iD]), libelle = clean(r[iT]);
+        if (!date || !libelle) continue;
+        const type = peaType(libelle), quantite = Math.abs(parseNum(r[iQ]) || 0), total = round2(parseNum(r[iM]) || 0), frais = round2(Math.abs(parseNum(r[iF]) || 0));
+        // Montant net = cours × quantité ± frais
+        const prix = (type === 'achat' || type === 'vente') && quantite ? +((Math.abs(total) + (type === 'achat' ? -frais : frais)) / quantite).toFixed(4) : 0;
+        ops.push({ date, type, libelleBanque: libelle, nom: clean(r[iN]), isin: String(r[iI] || '').trim(), quantite, prix, frais, total, ref: '', estime: false });
+      }
+      return [Object.assign({ kind: 'peaOps', source: 'historique', ops }, peaEntete(f.rows.slice(0, h.index).map(r => r.join(' ')).join('\n')))];
+    }
+  });
+  IMPORTERS.push({
+    id: 'pea-ordres', label: 'PEA — liste des ordres (CSV)', kind: 'peaOps',
+    detect: f => f.rows && findHeader(f.rows, ['Date de création', 'Isin', 'Statut', 'Référence']) ? 0.96 : 0,
+    parse(f) {
+      const h = findHeader(f.rows, ['Date de création', 'Isin', 'Statut', 'Référence']);
+      const c = n => h.col(n), iD = c('Date de mise à jour'), iC = c('Date de création'), iT = c('Type d’opération'), iN = c('Nom'), iI = c('Isin'),
+            iQ = c('Quantité'), iCours = c('Cours d’exécution'), iM = c('Montant'), iS = c('Statut'), iR = c('Référence');
+      const ops = [], autres = [];
+      for (const r of f.rows.slice(h.index + 1)) {
+        const statut = clean(r[iS]), date = toISO(r[iD]) || toISO(r[iC]);
+        if (!date || !statut) continue;
+        const type = peaType(r[iT]), quantite = Math.abs(parseNum(r[iQ]) || 0), prix = parseNum(r[iCours]) || 0, m = parseNum(r[iM]);
+        const o = { date, type, libelleBanque: clean(r[iT]), nom: clean(r[iN]), isin: String(r[iI] || '').trim(), quantite, prix, ref: clean(r[iR]) };
+        if (!/ex[eé]cut/i.test(statut)) { autres.push(Object.assign(o, { statut })); continue; }
+        // Montant pas encore connu (ordre du jour, non réglé) : estimé quantité × cours, sans frais
+        const estime = !(m != null && isFinite(m) && m !== 0), signe = type === 'vente' ? 1 : -1;
+        const total = estime ? round2(signe * quantite * prix) : round2(m);
+        const brut = quantite * prix, frais = estime ? 0 : round2(Math.max(0, type === 'vente' ? brut - Math.abs(total) : Math.abs(total) - brut));
+        ops.push(Object.assign(o, { total, frais, estime }));
+      }
+      return [Object.assign({ kind: 'peaOps', source: 'ordres', ops, enCours: autres }, peaEntete(f.rows.slice(0, h.index).map(r => r.join(' ')).join('\n')))];
+    }
+  });
+  // Empreinte : date + type + ISIN + quantité (achats/ventes/coupons) ou date + type + montant (versements, taxes…)
+  const peaFp = o => { const d = toISO(o.date) || ''; const t = o.type; return (t === 'achat' || t === 'vente' || t === 'dividende') && o.isin
+    ? `${d}|${t}|${o.isin}|${(+o.quantite || 0).toFixed(6)}` : `${d}|${t}|${o.isin || ''}|${round2(o.total).toFixed(2)}`; };
+  function applyPeaOps(data, res, a) {
+    const pf = data.portefeuille = data.portefeuille || {};
+    pf.operations = Array.isArray(pf.operations) ? pf.operations : [];
+    const existing = withDupIndex(pf.operations, peaFp), index = {};
+    existing.forEach((k, i) => { index[k] = pf.operations[i]; });
+    const fps = withDupIndex(res.ops, peaFp);
+    const added = [], maj = [], parType = {};
+    res.ops.forEach((o, i) => {
+      const deja = index[fps[i]];
+      if (deja) {
+        // Montant estimé (ordre du jour) remplacé par le montant réel quand il arrive
+        if (deja.estime && !o.estime) { maj.push({ id: deja.id, avant: { total: deja.total, frais: deja.frais, prix: deja.prix, estime: true } });
+          Object.assign(deja, { total: o.total, frais: o.frais, prix: o.prix || deja.prix, estime: false }); }
+        if (!deja.ref && o.ref) deja.ref = o.ref;
+        return;
+      }
+      added.push({ id: `pop-${a.importId}-${i}`, date: o.date, type: o.type, nom: o.nom || o.libelleBanque, ticker: '', isin: o.isin, quantite: o.quantite,
+        prix: o.prix, frais: o.frais, total: o.total, ref: o.ref || '', estime: !!o.estime, libelleBanque: o.libelleBanque, importId: a.importId });
+      parType[o.type] = (parType[o.type] || 0) + 1;
+    });
+    pf.operations = pf.operations.concat(added).sort((x, y) => (toISO(y.date) || '').localeCompare(toISO(x.date) || ''));
+    const dates = res.ops.map(o => o.date).sort();
+    return { kind: 'peaOps', cible: 'Portefeuille › PEA › opérations', ajoutes: added.length, ignores: res.ops.length - added.length, misAJour: maj.length,
+      parType, periode: dates.length ? [dates[0], dates[dates.length - 1]] : null, enCours: (res.enCours || []).length, undoMaj: maj,
+      apercu: added.slice(0, 15).map(o => ({ date: o.date, type: o.type, nom: o.nom, quantite: o.quantite, total: o.total, estime: o.estime })) };
+  }
+
   const CRYPTO_IN = new Set(['depot', 'achat']);
   IMPORTERS.push({
     id: 'swissborg-xlsx', label: 'SwissBorg — relevé de compte (Excel)', kind: 'crypto',
@@ -3743,43 +3829,15 @@ const EmeraudeCore = (() => {
         if (!date || !type || !symbol) continue;
         const gross = Math.abs(parseNum(r[iG]) || 0), net = Math.abs(parseNum(r[iN]) || gross);
         const grossEur = Math.abs(parseNum(r[iGE]) || 0), netEur = Math.abs(parseNum(r[iNE]) || grossEur);
-        const qte = CRYPTO_IN.has(type) ? net : gross;
+        // Quantité réellement entrée ou sortie = montant NET (frais déduits). Les « Withdrawal · Periodic fee »
+        // (frais de gestion mensuels) ont un montant brut nul : seul le net les retire du solde.
+        const qte = net;
         // montant = flux d'argent entrant/sortant (dépôts, retraits, gains) ; échanges internes = 0
-        const montant = type === 'depot' ? netEur : type === 'retrait' ? -grossEur : 0;
-        txs.push({ date, heure: String(r[iT]).slice(11, 16), type, symbol, qte, prix: gross ? round2(grossEur / gross) : 0,
-          montant: round2(montant), valeurEur: round2(grossEur), note: [raw !== normText(type) ? r[iTy] : '', r[iNote] || ''].filter(Boolean).join(' · ') });
+        const montant = type === 'depot' ? netEur : type === 'retrait' ? -(netEur || grossEur) : 0;
+        txs.push({ date, heure: String(r[iT]).slice(11, 16), type, symbol, qte, prix: gross ? round2(grossEur / gross) : (net ? round2(netEur / net) : 0),
+          montant: round2(montant), valeurEur: round2(grossEur || netEur), note: [raw !== normText(type) ? r[iTy] : '', r[iNote] || ''].filter(Boolean).join(' · ') });
       }
       return [{ kind: 'crypto', walletHint: 'SwissBorg', txs }];
-    }
-  });
-
-  IMPORTERS.push({
-    id: 'binance-csv', label: 'Binance — historique des transactions (CSV)', kind: 'crypto',
-    detect: f => f.rows && findHeader(f.rows, ['UTC_Time', 'Operation', 'Coin', 'Change']) ? 0.95 : 0,
-    parse(f) {
-      const h = findHeader(f.rows, ['UTC_Time', 'Operation', 'Coin', 'Change']);
-      const c = n => h.col(n);
-      const iT = c('UTC_Time'), iOp = c('Operation'), iC = c('Coin'), iCh = c('Change'), iR = c('Remark');
-      const FIAT = /^(EUR|USD|GBP|CHF)$/;
-      const rows = f.rows.slice(h.index + 1).map(r => ({ time: String(r[iT] || ''), op: String(r[iOp] || ''), coin: String(r[iC] || '').toUpperCase(), change: parseNum(r[iCh]) || 0, remark: r[iR] || '' }))
-        .filter(r => toISO(r.time) && r.coin && r.change);
-      const fiatByTime = {};
-      rows.forEach(r => { if (FIAT.test(r.coin) && !/deposit|withdraw/i.test(r.op)) fiatByTime[r.time] = (fiatByTime[r.time] || 0) + r.change; });
-      const txs = rows.map(r => {
-        let type;
-        if (/deposit/i.test(r.op)) type = 'depot';
-        else if (/withdraw/i.test(r.op)) type = 'retrait';
-        else if (/fee/i.test(r.op)) type = 'retrait';
-        else if (/interest|reward|distribution|airdrop|commission|cashback|earn|staking/i.test(r.op)) type = 'depot';
-        else type = r.change > 0 ? 'achat' : 'vente';
-        const qte = Math.abs(r.change), fiat = fiatByTime[r.time];
-        const fiatFlow = FIAT.test(r.coin) && /deposit|withdraw/i.test(r.op) ? r.change : 0;
-        return { date: toISO(r.time), heure: r.time.slice(11, 16), type, symbol: r.coin, qte,
-          prix: !FIAT.test(r.coin) && fiat ? round2(Math.abs(fiat) / qte) : (FIAT.test(r.coin) ? 1 : 0),
-          montant: round2(fiatFlow), valeurEur: FIAT.test(r.coin) ? round2(qte) : (fiat ? round2(Math.abs(fiat)) : 0),
-          note: [r.op, r.remark].filter(Boolean).join(' · ') };
-      });
-      return [{ kind: 'crypto', walletHint: 'Binance', txs }];
     }
   });
 
@@ -3902,6 +3960,100 @@ const EmeraudeCore = (() => {
   const cryptoFp = t => `${toISO(t.date)}|${t.type}|${String(t.symbol).toUpperCase()}|${Math.abs(+t.qte || 0).toFixed(8)}`;
   const revenuFp = r => `${String(toISO(r.date) || '').slice(0, 7)}|${round2(r.montant).toFixed(2)}`;
 
+  // ── Doublons : imports répétés (relevés qui se chevauchent, même fichier, autre format) ──
+  // Exact : date + montant (+ rang le même jour). Probable : même montant, date à ± 3 jours,
+  // libellé proche (export en date d'opération / de comptabilisation, CSV puis OFX…).
+  const MOTS_VIDES = new Set(['prlv', 'sepa', 'carte', 'paiement', 'paiemt', 'vir', 'virement', 'achat', 'facture', 'debit', 'credit', 'cb', 'inst', 'web', 'the', 'les', 'des', 'sas', 'sarl']);
+  const libCle = s => normText(s).replace(/\d+/g, ' ').split(' ').filter(w => w.length > 2 && !MOTS_VIDES.has(w)).slice(0, 2).join(' ');
+  function libProches(a, b) {
+    const x = libCle(a), y = libCle(b);
+    return !x || !y || x === y || x.split(' ')[0] === y.split(' ')[0] || x.includes(y) || y.includes(x);
+  }
+  const ecartJours = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
+  function doublonProbable(o, t) {
+    return Math.abs(round2(o.amount) - round2(t.amt)) <= 0.01 && ecartJours(o.date, txnDate(t)) <= 3 && libProches(o.label || o.detail, t.desc || t.detail);
+  }
+
+  // Recherche dans les données existantes : copies venues d'imports différents (ou d'une saisie)
+  function chercherDoublons(data) {
+    const out = [];
+    const grouper = (items, cle, src) => {
+      const g = {};
+      items.forEach(it => { const k = cle(it); (g[k] = g[k] || []).push(it); });
+      return Object.values(g).filter(l => l.length > 1).map(l => {
+        const parImport = {};
+        l.forEach(it => { const k = it.importId || 'saisie'; (parImport[k] = parImport[k] || []).push(it); });
+        const garde = Object.values(parImport).sort((a, b) => b.length - a.length)[0];
+        if (garde.length === l.length) return null;              // tout vient du même fichier : opérations distinctes
+        const surplus = l.length - garde.length;
+        return { items: l.filter(it => !garde.includes(it)).slice(-surplus), total: l.length };
+      }).filter(Boolean);
+    };
+    (data.banks || []).forEach(b => (b.accounts || []).forEach(a => {
+      const txns = a.txns || [];
+      const sures = grouper(txns, t => `${txnDate(t)}|${round2(t.amt).toFixed(2)}`);
+      const pris = new Set(sures.flatMap(x => x.items));
+      const meme = x => { const l = txns.filter(t => txnDate(t) === txnDate(x.items[0]) && round2(t.amt) === round2(x.items[0].amt)); return l.every(t => libProches(t.desc, l[0].desc)); };
+      sures.forEach(x => out.push({ kind: 'bank', certitude: meme(x) ? 'certain' : 'probable', owner: a, lieu: `${b.name} › ${a.nom}`, items: x.items,
+        date: txnDate(x.items[0]), libelle: x.items[0].desc, montant: round2(x.items[0].amt), nb: x.total }));
+      // Probables : même montant, dates proches, libellés proches, imports différents
+      const tri = txns.filter(t => !pris.has(t)).slice().sort((x, y) => txnDate(x).localeCompare(txnDate(y)));
+      tri.forEach((t, i) => {
+        if (pris.has(t)) return;
+        for (let j = i + 1; j < tri.length && ecartJours(txnDate(tri[j]), txnDate(t)) <= 3; j++) {
+          const u = tri[j];
+          if (pris.has(u) || (u.importId || 'saisie') === (t.importId || 'saisie') || txnDate(u) === txnDate(t)) continue;
+          if (Math.abs(round2(u.amt) - round2(t.amt)) <= 0.01 && libProches(t.desc, u.desc)) {
+            pris.add(t); pris.add(u);
+            out.push({ kind: 'bank', certitude: 'probable', owner: a, lieu: `${b.name} › ${a.nom}`, items: [u], autre: t,
+              date: txnDate(u), libelle: u.desc, montant: round2(u.amt), nb: 2 });
+            break;
+          }
+        }
+      });
+    }));
+    (data.cryptoWallets || []).forEach(w => grouper(w.transactions || [], cryptoFp).forEach(x => out.push({ kind: 'crypto', certitude: 'certain', owner: w,
+      lieu: `Crypto › ${w.name}`, items: x.items, date: toISO(x.items[0].date), libelle: `${x.items[0].type} ${x.items[0].symbol}`, montant: +x.items[0].qte, nb: x.total })));
+    grouper(((data.portefeuille || {}).operations) || [], peaFp).forEach(x => out.push({ kind: 'peaOps', certitude: 'certain', owner: data.portefeuille,
+      lieu: 'Portefeuille › PEA', items: x.items, date: toISO(x.items[0].date), libelle: `${x.items[0].type} ${x.items[0].nom || ''}`, montant: round2(x.items[0].total), nb: x.total }));
+    grouper(data.revenus || [], r => normText(r.source) + '|' + revenuFp(r)).forEach(x => out.push({ kind: 'revenus', certitude: 'certain', owner: data,
+      lieu: `Revenus › ${x.items[0].source}`, items: x.items, date: toISO(x.items[0].date), libelle: x.items[0].source, montant: +x.items[0].montant, nb: x.total }));
+    return out;
+  }
+
+  // Suppression des copies choisies, avec correction du solde / des quantités et du journal
+  // (pour qu'une annulation ultérieure de l'import ne corrige pas une seconde fois).
+  function supprimerDoublons(data, groupes, today) {
+    const journal = id => (data.imports || []).find(e => e.id === id && !e.annule);
+    let n = 0;
+    groupes.forEach(g => g.items.forEach(it => {
+      if (g.kind === 'bank') {
+        const a = g.owner, i = (a.txns || []).indexOf(it); if (i < 0) return;
+        a.txns.splice(i, 1); n++;
+        const d = txnDate(it), amt = round2(it.amt), avant = round2(a.solde);
+        // Les soldes officiels (relevé, confirmé) font foi ; les autres ancres comptaient la copie
+        (a.soldes || []).forEach(s => { if (s.date >= d && s.source !== 'relevé' && s.source !== 'confirmé') s.solde = round2(s.solde - amt); });
+        a.solde = (a.soldes || []).length ? balanceAt(a, today) : round2(a.solde - amt);
+        if (Math.abs(avant - a.solde) > 0.005) { const e = journal(it.importId); if (e && e.soldeApres != null) e.soldeApres = round2(e.soldeApres - (avant - a.solde)); }
+        accountRecompute(a, today);
+      } else if (g.kind === 'crypto') {
+        const w = g.owner, i = (w.transactions || []).indexOf(it); if (i < 0) return;
+        w.transactions.splice(i, 1); n++;
+        const delta = (CRYPTO_IN.has(it.type) ? 1 : -1) * Math.abs(+it.qte || 0);
+        const x = (w.assets || []).find(s => s.symbol === it.symbol);
+        if (x) { x.qte = +((+x.qte || 0) - delta).toFixed(8); if (Math.abs(x.qte) < 1e-9) x.qte = 0; }
+        const e = journal(it.importId); if (e && e.deltas && e.deltas[it.symbol] != null) e.deltas[it.symbol] = +(e.deltas[it.symbol] - delta).toFixed(8);
+      } else if (g.kind === 'revenus') {
+        const i = (data.revenus || []).indexOf(it); if (i < 0) return;
+        data.revenus.splice(i, 1); n++;
+      } else if (g.kind === 'peaOps') {
+        const ops = (g.owner && g.owner.operations) || [], i = ops.indexOf(it); if (i < 0) return;
+        ops.splice(i, 1); n++;
+      }
+    }));
+    return n;
+  }
+
   // ── Application des imports (mutent l'objet data reçu ; journal dans data.imports) ──
   function findOrCreateAccount(data, target) {
     data.banks = data.banks || [];
@@ -3926,9 +4078,18 @@ const EmeraudeCore = (() => {
     const soldeAvant = round2(acc.solde);
     const existing = new Set(withDupIndex(acc.txns, t => bankFp(txnDate(t), t.amt)));
     const fps = withDupIndex(res.ops, o => bankFp(o.date, o.amount));
-    const added = [];
+    // Doublons probables : opérations déjà là mais à une date proche (± 3 jours), même montant, libellé proche
+    const existingFps = withDupIndex(acc.txns, t => bankFp(txnDate(t), t.amt)), newSet = new Set(fps);
+    const pool = acc.txns.filter((t, i) => !newSet.has(existingFps[i]));
+    const added = [], probables = [];
     res.ops.forEach((o, i) => {
       if (existing.has(fps[i])) return;
+      const j = pool.findIndex(t => doublonProbable(o, t));
+      if (j >= 0) {
+        const t = pool.splice(j, 1)[0];
+        probables.push({ date: o.date, desc: clean(o.label || o.detail) || '—', amt: round2(o.amount), existant: { date: txnDate(t), desc: t.desc, amt: t.amt } });
+        if (!a.inclureProbables) return;
+      }
       added.push({ id: `txn-${a.importId}-${i}`, date: o.date, time: '00:00', desc: clean(o.label || o.detail) || '—', detail: clean(o.detail),
         amt: round2(o.amount), cat: o.amount >= 0 ? 'credit' : 'debit', categorie: clean(o.category), sousCategorie: clean(o.subcategory),
         ref: clean(o.ref), importId: a.importId });
@@ -3954,8 +4115,15 @@ const EmeraudeCore = (() => {
     }
     accountRecompute(acc, a.today);
     const dates = res.ops.map(o => o.date).sort();
-    return { kind: 'bank', cible: `${bank.name} › ${acc.nom}`, bankId: bank.id, accountId: acc.id,
-      ajoutes: added.length, ignores: res.ops.length - added.length, periode: dates.length ? [dates[0], dates[dates.length - 1]] : null,
+    // Relevé déjà importé dans un AUTRE compte (mauvais compte cible ?)
+    let autreCompte = null;
+    (data.banks || []).forEach(b => (b.accounts || []).forEach(x => {
+      if (x === acc || autreCompte || !(x.txns || []).length) return;
+      const s = new Set(withDupIndex(x.txns, t => bankFp(txnDate(t), t.amt))), nb = fps.filter(f => s.has(f)).length;
+      if (nb >= 3 && nb >= res.ops.length * 0.5) autreCompte = { compte: `${b.name} › ${x.nom}`, nb };
+    }));
+    return { kind: 'bank', cible: `${bank.name} › ${acc.nom}`, bankId: bank.id, accountId: acc.id, probables, autreCompte,
+      ajoutes: added.length, ignores: res.ops.length - added.length - (a.inclureProbables ? 0 : probables.length), periode: dates.length ? [dates[0], dates[dates.length - 1]] : null,
       soldeAvant, soldeApres: acc.solde, soldeSource, compteCree: created, banqueCreee: !!createdBank,
       apercu: added.slice(0, 12).map(t => ({ date: t.date, desc: t.desc, amt: t.amt })) };
   }
@@ -3963,6 +4131,8 @@ const EmeraudeCore = (() => {
   function applyPea(data, res, a) {
     const pf = data.portefeuille = data.portefeuille || {};
     pf.pea = pf.pea || {}; pf.positions = pf.positions || [];
+    const dejaDate = toISO(pf.pea.dateEdition);
+    const plusAncien = !!(dejaDate && res.date && res.date < dejaDate);
     const undo = { positions: clone(pf.positions), pea: clone(pf.pea) };
     const byIsin = Object.fromEntries(pf.positions.map(p => [p.isin, p]));
     const newIsins = new Set(res.positions.map(p => p.isin));
@@ -3972,7 +4142,7 @@ const EmeraudeCore = (() => {
     return { kind: 'pea', cible: 'Portefeuille › PEA', positions: res.positions.length,
       nouvelles: res.positions.filter(p => !byIsin[p.isin]).map(p => p.nom),
       sorties: undo.positions.filter(p => !newIsins.has(p.isin)).map(p => p.nom),
-      valoTotal: pf.pea.valoTotal, undo };
+      valoTotal: pf.pea.valoTotal, undo, plusAncien, dateDeja: dejaDate || null };
   }
 
   function applyCrypto(data, res, a) {
@@ -4103,7 +4273,7 @@ const EmeraudeCore = (() => {
     return { kind: 'json', cible: faits.join(', ') || 'aucune section', sections: faits.length, undo };
   }
 
-  const APPLY = { bank: applyBank, pea: applyPea, crypto: applyCrypto, revenus: applyRevenus, json: applyJson };
+  const APPLY = { bank: applyBank, pea: applyPea, peaOps: applyPeaOps, crypto: applyCrypto, revenus: applyRevenus, json: applyJson };
   // a = { importId, today, fileName, fileKey, importerId, target, mode, balanceOverride, source, compte, choices }
   function applyImport(data, res, a) {
     if (!APPLY[res.kind]) throw new Error('Type d’import inconnu : ' + res.kind);
@@ -4123,6 +4293,7 @@ const EmeraudeCore = (() => {
     const e = (data.imports || []).find(x => x.id === id);
     if (!e) throw new Error('Import introuvable');
     if (e.annule) throw new Error('Import déjà annulé');
+    if (e.kind === 'doublons') throw new Error('Un nettoyage de doublons ne s’annule pas.');
     const later = (data.imports || []).filter(x => !x.annule && x.kind === e.kind && data.imports.indexOf(x) > data.imports.indexOf(e));
     if (e.kind === 'bank') {
       let acc = null, bank = null;
@@ -4155,6 +4326,10 @@ const EmeraudeCore = (() => {
       if (e.walletCree && !w.transactions.length) data.cryptoWallets = data.cryptoWallets.filter(x => x !== w);
     } else if (e.kind === 'revenus') {
       data.revenus = (data.revenus || []).filter(r => r.importId !== id);
+    } else if (e.kind === 'peaOps') {
+      const pf = data.portefeuille || {};
+      pf.operations = (pf.operations || []).filter(o => o.importId !== id);
+      (e.undoMaj || []).forEach(m => { const o = pf.operations.find(x => x.id === m.id); if (o) Object.assign(o, m.avant); });
     }
     e.annule = today;
     delete e.undo;
@@ -4778,6 +4953,10 @@ const EmeraudeCore = (() => {
           if (!B.categories.some(c => c.id === id)) B.categories.push({ id, nom, icone, couleur, type: 'depense', budget_mensuel: 0, motsCles: [] });
         });
       } },
+    { to: 7, label: 'Crypto : Binance n’est plus utilisé (fonds transférés sur SwissBorg) : wallet retiré',
+      run(d) {
+        if (Array.isArray(d.cryptoWallets)) d.cryptoWallets = d.cryptoWallets.filter(w => !/binance/i.test(String(w.name || w.id || '')));
+      } },
   ];
   function migrate(d, today) {
     const from = +d.schemaVersion || 1;
@@ -4949,7 +5128,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX };
 })();
 // IMPORT_CORE_END
 
@@ -5465,6 +5644,25 @@ function calcCryptoTotal() {
   const total = (DATA.cryptoWallets || []).reduce((sum, wallet) => sum + (wallet.assets || []).reduce((assetSum, asset) => assetSum + (+asset.qte || 0) * (+asset.prix || 0), 0), 0);
   return total;
 }
+function patrimoineSansPrets() { try { return !!SETTINGS.patrimoineSansPrets; } catch(e) { return false; } }
+function togglePatrimoinePrets() {
+  SETTINGS.patrimoineSansPrets = !SETTINGS.patrimoineSansPrets; saveSettings();
+  const P = recalculateDerivedData();
+  const net = document.getElementById('tb-net'); if (net) net.textContent = fmt(P.total);
+  if (document.getElementById('heroVal')) render();
+  if (document.querySelector('#parametres.active, #page-parametres.active')) renderParametres();
+}
+function heroPretsInfo(P) {
+  const lbl = document.getElementById('heroLbl');
+  if (lbl) lbl.textContent = P.sansPrets ? 'Patrimoine Total (hors prêts)' : 'Patrimoine Net Total';
+  const el = document.getElementById('heroPrets');
+  if (!el) return;
+  const dette = Math.abs(P.emprunts || 0);
+  el.style.display = dette > 0 ? '' : 'none';
+  el.textContent = P.sansPrets
+    ? `Prêts non déduits (${fmt(dette)}) · inclure`
+    : `Dont prêts restant dus : −${fmt(dette)} · ne pas déduire`;
+}
 function calcEmpruntsTotal() {
   const total = (DATA.prets || []).reduce((sum, pret) => sum + (typeof calcRestantActuel === 'function' ? calcRestantActuel(pret) : (+pret.capitalEmprunte || 0)), 0);
   return total > 0 ? -total : 0;
@@ -5479,8 +5677,11 @@ function getPatrimoineSnapshot() {
   const biens = calcBiensTotal();
   const business = calcBusinessTotal();
   const emprunts = calcEmpruntsTotal();
-  const total = banque + portefeuille + crypto + immobilier + cash + metaux + biens + business + emprunts;
-  return { banque, portefeuille, crypto, immobilier, cash, metaux, biens, business, emprunts, total };
+  const actifs = banque + portefeuille + crypto + immobilier + cash + metaux + biens + business;
+  // Option « hors prêts » : le restant dû n'est pas déduit (utile tant que la valeur des biens financés n'est pas saisie)
+  const sansPrets = patrimoineSansPrets();
+  const total = sansPrets ? actifs : actifs + emprunts;
+  return { banque, portefeuille, crypto, immobilier, cash, metaux, biens, business, emprunts, total, actifs, totalAvecPrets: actifs + emprunts, sansPrets };
 }
 function parseAnyDate(value) {
   if (!value) return null;
@@ -8401,6 +8602,7 @@ function render() {
 
   // Hero
   document.getElementById('heroVal').textContent = fmt(P.total);
+  heroPretsInfo(P);
   buildArea(DATA.evolution, 'hero-area','hero-line', null, 210, 65, 5);
 
   // Stats
@@ -8542,7 +8744,7 @@ function render() {
 // ......................................
 // CRYPTO-MONNAIES
 // ......................................
-const CRYPTO_UI = { walletId:'binance', showTxForm:false, showSoldeForm:false, editSymbol:null };
+const CRYPTO_UI = { walletId:null, showTxForm:false, showSoldeForm:false, editSymbol:null };
 
 function cryptoWalletTotal(w) {
   return w.assets.reduce((s, a) => s + a.qte * a.prix, 0);
@@ -8965,6 +9167,7 @@ const SETTINGS_DEFAULTS = {
   importProfiles: [],   // CSV quelconques : colonnes associées par l'utilisateur
   importTargets: {},    // dernier compte/wallet choisi par lecteur (présélection)
   notifMaj: true,       // bandeau « nouvelle version disponible »
+  patrimoineSansPrets: false, // patrimoine net affiché sans déduire le restant dû des prêts
   immoTMI: 30,          // tranche marginale d'imposition (calcul de l'impôt en micro-BIC / micro-foncier)
   htmlFileAutoSync: false,
   odEnabled: false,
@@ -8984,7 +9187,11 @@ let SETTINGS = Object.assign({}, SETTINGS_DEFAULTS);
 function saveSettings() {
   try { localStorage.setItem('emeraude-settings', JSON.stringify(SETTINGS)); } catch(e) {}
 }
-function settingToggle(key) { SETTINGS[key] = !SETTINGS[key]; saveSettings(); renderParametres(); applySettingsToUI(); }
+function settingToggle(key) {
+  if (key === 'patrimoineSansPrets') { SETTINGS[key] = !SETTINGS[key]; saveSettings(); renderParametres();
+    const P = recalculateDerivedData(); const net = document.getElementById('tb-net'); if (net) net.textContent = fmt(P.total); return; }
+  SETTINGS[key] = !SETTINGS[key]; saveSettings(); renderParametres(); applySettingsToUI();
+}
 function settingSet(key, val) { SETTINGS[key] = val; saveSettings(); renderParametres(); }
 function applySettingsToUI() {
   document.querySelector('.sidebar')?.classList.toggle('compact', !!SETTINGS.sidebarCompact);
@@ -9773,7 +9980,7 @@ function impInitResult() {
   const c = IMP.cur, r = impRes();
   if (!r) return;
   const N = EmeraudeCore.normText;
-  c.balance = ''; c.mode = 'ajout'; c.target = null;
+  c.balance = ''; c.mode = 'ajout'; c.target = null; c.inclureProbables = false;
   const remembered = (SETTINGS.importTargets || {})[impTargetKey(r)];
   if (r.kind === 'bank') {
     const accounts = impAccounts();
@@ -9816,7 +10023,7 @@ function impInitResult() {
 function impArgs(importId) {
   const c = IMP.cur, now = new Date();
   return { importId, today: todayISO(), heure: now.toTimeString().slice(0, 5), fileName: c.item.name, fileKey: c.fileKey,
-    importerId: c.importerId, target: c.target, mode: c.mode, balanceOverride: c.balance, source: c.source, compte: c.compte, choices: c.choices };
+    importerId: c.importerId, target: c.target, mode: c.mode, balanceOverride: c.balance, inclureProbables: !!c.inclureProbables, source: c.source, compte: c.compte, choices: c.choices };
 }
 
 // Modifications des champs de l'étape de confirmation
@@ -9865,6 +10072,8 @@ function impApply() {
   render();
   IMP.msg = `✓ ${c.item.name} → ${e.cible} : ${impSummary(e)}`;
   if (e.kind === 'bank') IMP.analyse = { accountId: e.accountId, importId: id, fichier: c.item.name };
+  // Contrôle après chaque import : doublons restant dans les données
+  try { const dbl = EmeraudeCore.chercherDoublons(DATA).filter(g => g.certitude === 'certain'); if (dbl.length) IMP.msg += ` · ⚠ ${dbl.reduce((s, g) => s + g.items.length, 0)} doublon(s) dans vos données : voir « Contrôle des doublons »`; } catch (err) {}
   if (c.idx < c.results.length - 1) { c.idx++; impInitResult(); renderImports(); }
   else impNext();
 }
@@ -9883,7 +10092,9 @@ function impUndo(id) {
 }
 
 function impSummary(e) {
-  if (e.kind === 'bank') return `${e.ajoutes} opération(s) ajoutée(s), ${e.ignores} déjà présente(s) · ${e.soldeSource === 'carte' ? 'carte à débit différé : solde inchangé' : `solde ${impMoney(e.soldeAvant)} → ${impMoney(e.soldeApres)}`}${e.soldeSource === 'relevé' ? ' (solde du relevé)' : e.soldeSource === 'saisi' ? ' (saisi)' : ''}`;
+  if (e.kind === 'doublons') return `${e.supprimes} doublon(s) supprimé(s)`;
+  if (e.kind === 'peaOps') return `${e.ajoutes} opération(s) ajoutée(s), ${e.ignores} déjà présente(s)${e.misAJour ? `, ${e.misAJour} montant(s) mis à jour` : ''}`;
+  if (e.kind === 'bank') return `${e.ajoutes} opération(s) ajoutée(s), ${e.ignores} déjà présente(s)${e.probables && e.probables.length ? `, ${e.probables.length} doublon(s) probable(s) écarté(s)` : ''} · ${e.soldeSource === 'carte' ? 'carte à débit différé : solde inchangé' : `solde ${impMoney(e.soldeAvant)} → ${impMoney(e.soldeApres)}`}${e.soldeSource === 'relevé' ? ' (solde du relevé)' : e.soldeSource === 'saisi' ? ' (saisi)' : ''}`;
   if (e.kind === 'pea') return `${e.positions} position(s)${e.nouvelles?.length ? `, ${e.nouvelles.length} nouvelle(s)` : ''}${e.sorties?.length ? `, ${e.sorties.length} sortie(s)` : ''}`;
   if (e.kind === 'crypto') return `${e.ajoutes} opération(s) ${e.mode === 'remplacement' ? '(historique remplacé)' : `ajoutée(s), ${e.ignores} déjà présente(s)`}`;
   if (e.kind === 'revenus') return `${e.ajoutes} revenu(s) ajouté(s), ${e.ignores} déjà présent(s)`;
@@ -9973,6 +10184,7 @@ function impRenderWizard() {
 
   let body = '', p = null, perr = '';
   if (r.kind !== 'mapping') { try { p = EmeraudeCore.previewImport(DATA, r, impArgs('apercu')); } catch (e) { perr = e?.message || String(e); } }
+  body += impDoublonsAlertes(c, r, p);
 
   if (r.kind === 'bank') {
     const accounts = impAccounts();
@@ -9985,13 +10197,13 @@ function impRenderWizard() {
       body += `<div class="form-grid">
         ${impField('Banque', `<input class="form-input" value="${impEsc(n.bankName)}" onchange="impSetNew('bankName', this.value)" placeholder="Ex : Crédit Agricole">`)}
         ${impField('Nom du compte', `<input class="form-input" value="${impEsc(n.nom)}" onchange="impSetNew('nom', this.value)">`)}
-        ${impField('Type', `<select class="form-select" onchange="impSetNew('type', this.value)">${['Compte Courant', 'Livret A', 'LDDS', 'LEP', 'PEL', 'CEL', 'Compte Joint', 'Autre'].map(t => `<option ${t === n.type ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
+        ${impField('Type', `<select class="form-select" onchange="impSetNew('type', this.value)">${['Compte Courant', 'Carte bancaire', 'Livret A', 'LDDS', 'LEP', 'PEL', 'CEL', 'Compte Joint', 'Autre'].map(t => `<option ${t === n.type ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
       </div>`;
     }
     if (p) {
       body += `<div style="font-size:0.78rem;color:var(--text-2);line-height:1.7;margin:6px 0 10px">
         ${r.ops.length} opération(s) dans le fichier${p.periode ? ` (du ${EmeraudeCore.isoToFr(p.periode[0])} au ${EmeraudeCore.isoToFr(p.periode[1])})` : ''} :
-        <strong style="color:var(--em-bright)">${p.ajoutes} nouvelle(s)</strong>, ${p.ignores} déjà présente(s).<br>
+        <strong style="color:var(--em-bright)">${p.ajoutes} nouvelle(s)</strong>, ${p.ignores} déjà présente(s)${p.probables.length ? `, <strong style="color:var(--gold-base)">${p.probables.length} doublon(s) probable(s) ${c.inclureProbables ? 'importé(s) quand même' : 'écarté(s)'}</strong>` : ''}.<br>
         Solde : ${impMoney(p.soldeAvant)} → <strong>${impMoney(p.soldeApres)}</strong>
         ${r.balance ? `<span style="color:var(--text-4)">(solde officiel du relevé au ${EmeraudeCore.isoToFr(r.balance.date)} : ${impMoney(r.balance.value)})</span>` : '<span style="color:var(--text-4)">(calculé : solde actuel + nouvelles opérations)</span>'}</div>`;
       body += `<div class="form-grid" style="grid-template-columns:minmax(0,260px)">${impField('Solde réel après import (à corriger si différent)',
@@ -10005,6 +10217,20 @@ function impRenderWizard() {
       Les positions du PEA sont <strong>remplacées</strong> par celles du fichier (les secteurs déjà saisis sont conservés).
       ${p?.nouvelles?.length ? `<br>Nouvelles : ${impEsc(p.nouvelles.join(', '))}` : ''}${p?.sorties?.length ? `<br><span style="color:var(--gold-base)">Disparaissent (vendues ?) : ${impEsc(p.sorties.join(', '))}</span>` : ''}</div>`;
     body += impTable(['Nom', 'Qté', 'Cours', 'Valeur', '+/- value'], r.positions.map(x => `<tr><td>${impEsc(x.nom)}</td><td>${x.quantite}</td><td>${impMoney(x.prixActuel)}</td><td>${impMoney(x.valeur)}</td><td class="${x.plusValueLatente >= 0 ? 'amt-pos' : 'amt-neg'}">${impMoney(x.plusValueLatente)}</td></tr>`));
+  } else if (r.kind === 'peaOps') {
+    const LIB = PTF_OP_LABELS;
+    if (p) {
+      const nb = {}; r.ops.forEach(o => { nb[o.type] = (nb[o.type] || 0) + 1; });
+      body += `<div style="font-size:0.78rem;color:var(--text-2);line-height:1.7;margin-bottom:10px">${r.source === 'ordres' ? 'Liste des ordres' : 'Historique des opérations'} du contrat ${impEsc(r.contrat || '?')}${p.periode ? ` (du ${EmeraudeCore.isoToFr(p.periode[0])} au ${EmeraudeCore.isoToFr(p.periode[1])})` : ''} :
+        ${Object.entries(nb).map(([k, v]) => `${v} ${impEsc((LIB[k] || [k])[0].toLowerCase())}`).join(', ')}.<br>
+        <strong style="color:var(--em-bright)">${p.ajoutes} nouvelle(s)</strong>, ${p.ignores} déjà présente(s)${p.misAJour ? `, ${p.misAJour} montant(s) estimé(s) remplacé(s) par le montant réel` : ''}.
+        ${r.ops.some(o => o.estime) ? `<br><span style="color:var(--gold-base)">${r.ops.filter(o => o.estime).length} ordre(s) exécuté(s) pas encore réglé(s) : montant estimé (quantité × cours), corrigé au prochain import de l’historique.</span>` : ''}
+        ${(r.enCours || []).length ? `<br><span style="color:var(--text-4)">${r.enCours.length} ordre(s) non exécuté(s) (${impEsc([...new Set(r.enCours.map(o => o.statut))].join(', '))}) : non importé(s).</span>` : ''}
+        <br><span style="color:var(--text-4)">Les positions (quantités, cours) ne changent pas : elles viennent du fichier « POSITIONS ». Ces opérations alimentent l’historique et le compteur d’ordres d’achat.</span></div>`;
+      if (p.apercu?.length) body += impTable(['Date', 'Opération', 'Titre', 'Qté', 'Montant'], p.apercu.map(o => `<tr><td>${EmeraudeCore.isoToFr(o.date)}</td><td>${impEsc((LIB[o.type] || [o.type])[0])}</td><td>${impEsc(o.nom)}</td>
+        <td style="text-align:right">${o.quantite || ''}</td><td style="text-align:right" class="${o.total >= 0 ? 'amt-pos' : 'amt-neg'}">${impMoney(o.total)}${o.estime ? ' <span style="font-size:0.6rem;color:var(--gold-base)">estimé</span>' : ''}</td></tr>`))
+        + (p.ajoutes > p.apercu.length ? `<div style="font-size:0.68rem;color:var(--text-4);margin-top:6px">… et ${p.ajoutes - p.apercu.length} autre(s)</div>` : '');
+    }
   } else if (r.kind === 'crypto') {
     const ws = DATA.cryptoWallets || [];
     body += `<div class="form-grid" style="grid-template-columns:1fr 1fr">${impField('Wallet cible', `<select class="form-select" onchange="impSetTarget(this.value)">
@@ -10076,13 +10302,73 @@ function impRenderDrop() {
   return impCard('📂 Dossier de dépôt', body, `Déposez vos relevés dans ${where} (depuis le PC ou le téléphone) : ils apparaissent ici, les nouveaux sont signalés.`);
 }
 
+// ── Alertes doublons à l'étape de confirmation ──
+function impDoublonsAlertes(c, r, p) {
+  const warn = (txt, rouge) => `<div style="padding:8px 12px;border-radius:8px;margin-bottom:10px;font-size:0.76rem;line-height:1.6;background:${rouge ? 'rgba(239,68,68,0.10)' : 'rgba(234,179,8,0.10)'};border:1px solid ${rouge ? 'rgba(239,68,68,0.35)' : 'rgba(234,179,8,0.35)'};color:${rouge ? '#FCA5A5' : '#FCD34D'}">${txt}</div>`;
+  let h = '';
+  const deja = (DATA.imports || []).filter(e => !e.annule && (e.fileKey === c.fileKey || (e.fichier === c.item.name && e.importer === c.importerId)));
+  if (deja.length) h += warn(`Ce fichier a déjà été importé le ${EmeraudeCore.isoToFr(deja[deja.length - 1].date)} (${impEsc(deja[deja.length - 1].cible)}). Seul ce qui manque sera ajouté.`);
+  if (!p) return h;
+  if (p.autreCompte) h += warn(`⚠ ${p.autreCompte.nb} opération(s) de ce relevé sont déjà dans <strong>${impEsc(p.autreCompte.compte)}</strong> : vérifiez le compte cible avant d’importer.`, true);
+  if (r.kind === 'pea' && p.plusAncien) h += warn(`⚠ Ce relevé (${EmeraudeCore.isoToFr(r.date)}) est plus ancien que celui déjà importé (${EmeraudeCore.isoToFr(p.dateDeja)}) : il remplacerait des positions plus récentes.`, true);
+  if ((r.kind === 'bank' || r.kind === 'crypto' || r.kind === 'revenus' || r.kind === 'peaOps') && p.ajoutes === 0 && !p.misAJour && !(p.probables || []).length && p.mode !== 'remplacement') h += warn('Rien de nouveau : tout le contenu de ce fichier est déjà importé.');
+  if (r.kind === 'bank' && (p.probables || []).length) {
+    h += warn(`<strong>${p.probables.length} doublon(s) probable(s)</strong> : même montant qu’une opération déjà présente, à quelques jours près, libellé proche (souvent la même opération exportée avec une autre date). ${c.inclureProbables ? 'Ils seront importés.' : 'Ils ne seront pas importés.'}
+      <details style="margin-top:6px"><summary style="cursor:pointer">Voir le détail</summary>${impTable(['Dans le fichier', 'Montant', 'Déjà présente'], p.probables.map(x => `<tr><td>${EmeraudeCore.isoToFr(x.date)} · ${impEsc(x.desc)}</td><td style="text-align:right">${impMoney(x.amt)}</td><td>${EmeraudeCore.isoToFr(x.existant.date)} · ${impEsc(x.existant.desc)}</td></tr>`))}</details>
+      <label style="display:block;margin-top:6px;color:var(--text-2)"><input type="checkbox" ${c.inclureProbables ? 'checked' : ''} onchange="impSet('inclureProbables', this.checked)"> Ce ne sont pas des doublons : les importer quand même</label>`);
+  }
+  return h;
+}
+
+// ── Contrôle des doublons dans les données existantes ──
+function impScanDoublons() {
+  IMP.scan = EmeraudeCore.chercherDoublons(DATA);
+  IMP.scanSel = IMP.scan.map(g => g.certitude === 'certain');
+  renderImports();
+}
+function impScanToggle(i, v) { IMP.scanSel[i] = v; renderImports(); }
+function impScanSupprimer() {
+  const groupes = IMP.scan.filter((g, i) => IMP.scanSel[i]);
+  const n = groupes.reduce((s, g) => s + g.items.length, 0);
+  if (!n || !confirm(`Supprimer ${n} doublon(s) ? Les soldes et quantités sont corrigés. (Ce nettoyage ne s’annule pas : une sauvegarde est conseillée.)`)) return;
+  try { localStorage.setItem('emeraude-data-backup', JSON.stringify(DATA)); } catch (e) {}
+  const s = EmeraudeCore.supprimerDoublons(DATA, groupes, todayISO());
+  DATA.imports = DATA.imports || [];
+  const now = new Date();
+  DATA.imports.push({ id: 'dbl-' + Date.now().toString(36), kind: 'doublons', date: todayISO(), heure: now.toTimeString().slice(0, 5), fichier: '—', cible: 'Contrôle des doublons', supprimes: s });
+  saveData(); render();
+  IMP.scan = EmeraudeCore.chercherDoublons(DATA);
+  IMP.scanSel = IMP.scan.map(g => g.certitude === 'certain');
+  IMP.msg = `✓ ${s} doublon(s) supprimé(s).`;
+  renderImports();
+}
+function impRenderScan() {
+  const s = IMP.scan;
+  let body = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-em" onclick="impScanDoublons()">🔍 Vérifier mes données</button>
+    <span style="font-size:0.7rem;color:var(--text-4)">Comptes bancaires et cartes, wallets crypto, revenus.</span></div>`;
+  if (s) {
+    if (!s.length) body += `<div style="margin-top:10px;font-size:0.8rem;color:var(--em-bright)">✓ Aucun doublon trouvé.</div>`;
+    else {
+      const nSel = s.reduce((t, g, i) => t + (IMP.scanSel[i] ? g.items.length : 0), 0);
+      body += `<div style="margin-top:10px;font-size:0.76rem;color:var(--text-2)">${s.filter(g => g.certitude === 'certain').length} doublon(s) certain(s) (cochés), ${s.filter(g => g.certitude === 'probable').length} probable(s) à vérifier (non cochés).</div>`
+        + impTable(['', 'Où', 'Date', 'Opération', 'Montant', 'Copies', 'Certitude'], s.map((g, i) => `<tr>
+          <td><input type="checkbox" ${IMP.scanSel[i] ? 'checked' : ''} onchange="impScanToggle(${i}, this.checked)"></td><td>${impEsc(g.lieu)}</td>
+          <td style="white-space:nowrap">${EmeraudeCore.isoToFr(g.date)}</td><td>${impEsc(g.libelle)}${g.autre ? `<div style="font-size:0.62rem;color:var(--text-4)">et le ${EmeraudeCore.isoToFr(EmeraudeCore.toISO(g.autre.date))} : ${impEsc(g.autre.desc)}</div>` : ''}</td>
+          <td style="text-align:right;white-space:nowrap">${g.kind === 'crypto' ? g.montant : impMoney(g.montant)}</td><td style="text-align:center">${g.items.length} en trop / ${g.nb}</td>
+          <td>${g.certitude === 'certain' ? '<span class="amt-neg">certain</span>' : '<span style="color:var(--gold-base)">probable</span>'}</td></tr>`))
+        + `<div style="margin-top:10px"><button class="btn btn-red" ${nSel ? '' : 'disabled'} onclick="impScanSupprimer()">🗑 Supprimer les ${nSel} copie(s) cochée(s)</button></div>`;
+    }
+  }
+  return impCard('🔍 Contrôle des doublons', body, 'À chaque import, les opérations déjà présentes sont reconnues et ignorées. Ce contrôle cherche les copies déjà enregistrées (relevés importés sous deux formats, à des dates décalées, saisies en double…).');
+}
+
 function impRenderJournal() {
   const list = (DATA.imports || []).slice().reverse();
   if (!list.length) return impCard('🧾 Journal des imports', '<div style="font-size:0.75rem;color:var(--text-4)">Aucun import pour l’instant.</div>');
   return impCard('🧾 Journal des imports', impTable(['Date', 'Fichier', 'Destination', 'Résultat', ''], list.map(e => `<tr style="${e.annule ? 'opacity:0.5' : ''}">
     <td style="white-space:nowrap">${EmeraudeCore.isoToFr(e.date)} ${impEsc(e.heure || '')}</td><td style="word-break:break-all">${impEsc(e.fichier)}</td>
     <td>${impEsc(e.cible)}</td><td style="font-size:0.72rem">${impEsc(impSummary(e))}${e.annule ? ` — <em>annulé le ${EmeraudeCore.isoToFr(e.annule)}</em>` : ''}</td>
-    <td>${e.annule ? '' : `<button class="btn btn-ghost" style="padding:4px 10px" onclick="impUndo('${impEsc(e.id)}')">↩ Annuler</button>`}</td></tr>`)),
+    <td>${e.annule || e.kind === 'doublons' ? '' : `<button class="btn btn-ghost" style="padding:4px 10px" onclick="impUndo('${impEsc(e.id)}')">↩ Annuler</button>`}</td></tr>`)),
     'Chaque import peut être annulé : ses opérations sont retirées et le solde corrigé.');
 }
 
@@ -10112,6 +10398,7 @@ function renderImports() {
       <div style="margin-top:6px;color:var(--text-4)">Pour les autres banques : exportez en OFX (« format Money ») si possible, sinon en CSV — l'appli vous demandera une fois quelles colonnes utiliser.</div></details>`,
       'Rien n’est modifié avant votre confirmation. Les opérations déjà présentes sont reconnues et ignorées.')}
     ${impRenderDrop()}
+    ${impRenderScan()}
     ${impRenderJournal()}
     ${impRenderProfiles()}`;
 }
@@ -10119,6 +10406,7 @@ function renderImports() {
 // Mapping symbol ?' identifiant CoinGecko
 const COINGECKO_IDS = {
   BTC: 'bitcoin', ETH: 'ethereum', CHSB: 'swissborg', BORG: 'swissborg', BNB: 'binancecoin',
+  BCH: 'bitcoin-cash', JITOSOL: 'jito-staked-sol', HYPERLIQUID: 'hyperliquid', HYPE: 'hyperliquid', XLM: 'stellar', HBAR: 'hedera-hashgraph', SUI: 'sui', MANTLE: 'mantle', MNT: 'mantle',
   USDC: 'usd-coin', USDT: 'tether', EURC: 'euro-coin', TRX: 'tron', SHIB: 'shiba-inu', PEPE: 'pepe', TON: 'the-open-network',
   SOL: 'solana', ADA: 'cardano', DOT: 'polkadot', MATIC: 'matic-network',
   LINK: 'chainlink', XRP: 'ripple', DOGE: 'dogecoin', LTC: 'litecoin',
@@ -10489,6 +10777,7 @@ function renderParametres() {
 
   // ── DASHBOARD ──
   const tabDashboard = `${sHd('🧭','Tableau de bord','Choisissez les blocs à afficher sur votre tableau de bord')}
+    ${tog('patrimoineSansPrets','Patrimoine net hors prêts','Ne pas déduire le restant dû des prêts du patrimoine net (en-tête et tableau de bord). Utile tant que la valeur des biens financés n’est pas saisie.')}
     ${tog('dashShowStats','Bloc statistiques patrimoine','Les 6 cartes de chiffres clés')}
     ${tog('dashShowEvolution','Graphique d\'évolution','Courbe sur 12 mois')}
     ${tog('dashShowDonut','Graphique de répartition','Donut de répartition par classe d\'actifs')}
@@ -10625,7 +10914,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261111-1924-cb75804';
+const APP_BUILD = '20261112-1204-df026c0';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
