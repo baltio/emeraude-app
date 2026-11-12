@@ -629,6 +629,16 @@ html, body {
 .hero-lbl {
   font-size: 0.7rem; letter-spacing: 0.35em; text-transform: uppercase; color: var(--text-3);
 }
+.ev-ctrl { display:flex; gap:4px; flex-wrap:wrap; }
+.ev-ctrl button, .ev-chip { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); color:var(--text-3);
+  border-radius:14px; padding:2px 9px; font-size:0.62rem; cursor:pointer; font-family:inherit; }
+.ev-ctrl button.on { color:var(--em-glow); border-color:rgba(16,185,129,0.45); background:rgba(16,185,129,0.1); }
+.ev-legend { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+.ev-chip { display:inline-flex; align-items:center; gap:5px; }
+.ev-chip i { width:9px; height:9px; border-radius:2px; display:inline-block; }
+.ev-chip.off { opacity:0.38; text-decoration:line-through; }
+.ev-chip b { color:var(--text-1); font-weight:600; }
+.ev-sum { font-size:0.68rem; color:var(--text-3); margin-top:8px; line-height:1.6; }
 .hero-prets {
   margin-top: 8px; background: none; border: 1px dashed rgba(148,163,184,0.35); border-radius: 20px;
   padding: 3px 11px; font-size: 0.72rem; color: var(--text-3); cursor: pointer; font-family: inherit;
@@ -1543,6 +1553,9 @@ html, body {
         <div class="nav-item" data-page="stats" data-icon="📊" data-title="Statistiques">
           <span class="nav-ico">📊</span><span>Statistiques</span>
         </div>
+        <div class="nav-item" data-page="analyses" data-icon="🔬" data-title="Analyses">
+          <span class="nav-ico">🔬</span><span>Analyses</span>
+        </div>
         <div class="nav-item" data-page="budget" data-icon="💸" data-title="Budget">
           <span class="nav-ico">💸</span><span>Budget</span>
         </div>
@@ -1738,25 +1751,11 @@ html, body {
           <!-- Evolution chart -->
           <div class="c3w col-2"><div class="c3">
             <div class="shine"></div>
-            <div class="chart-hd">Evolution Patrimoniale</div>
-            <div class="chart-axis-wrap">
-              <div class="chart-yaxis" id="ev-yaxis"></div>
-              <svg width="100%" height="130" viewBox="0 0 540 130" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="evgrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="rgba(16,185,129,0.32)"/>
-                    <stop offset="100%" stop-color="rgba(16,185,129,0)"/>
-                  </linearGradient>
-                </defs>
-                <line x1="0" y1="33"  x2="540" y2="33"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
-                <line x1="0" y1="66"  x2="540" y2="66"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
-                <line x1="0" y1="99"  x2="540" y2="99"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
-                <path id="ev-area" fill="url(#evgrad)"/>
-                <path id="ev-line" fill="none" stroke="rgba(52,211,153,0.9)" stroke-width="2" stroke-linecap="round"/>
-                <g id="ev-dots"></g>
-              </svg>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <div class="chart-hd" style="margin-bottom:0">Evolution Patrimoniale</div>
+              <div id="ev-ctrl" class="ev-ctrl"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:0.58rem;color:var(--text-4);letter-spacing:0.05em" id="ev-labs"></div>
+            <div id="ev-chart" style="margin-top:8px"></div>
           </div></div>
 
           <!-- Allocation donut -->
@@ -1908,6 +1907,9 @@ html, body {
       </div><!-- /dashboard -->
 
       <!-- ─── PLACEHOLDER PAGES ─── -->
+      <div class="page" id="page-analyses">
+        <div id="analyses-root"></div>
+      </div>
       <div class="page" id="page-stats">
         <div id="stats-root"></div>
       </div>
@@ -2265,7 +2267,7 @@ function buildDonut(slices, svgId, legendId) {
     const ix1= Math.cos(ang)*r, iy1= Math.sin(ang)*r;
     const ix2= Math.cos(ang+theta)*r, iy2= Math.sin(ang+theta)*r;
     const lg = theta > Math.PI ? 1 : 0;
-    const c  = COLORS[i % COLORS.length];
+    const c  = s.c || COLORS[i % COLORS.length];
     paths += `<path d="M${ix1.toFixed(2)},${iy1.toFixed(2)} A${r},${r} 0 ${lg} 1 ${ix2.toFixed(2)},${iy2.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)} A${R},${R} 0 ${lg} 0 ${x1.toFixed(2)},${y1.toFixed(2)} Z" fill="${c}" opacity="0.82" stroke="rgba(1,9,16,0.5)" stroke-width="0.5"/>`;
     legends += `<div class="leg-item"><div class="leg-dot" style="background:${c}"></div><span>${s.l}</span><span class="leg-pct">${Math.round(s.v/total*100)}%</span></div>`;
     ang += theta;
@@ -3543,7 +3545,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
       pg.classList.add('active');
       pg.querySelectorAll('.c3').forEach(attachTilt);
       // Lazy-render JS pages
-      const renderers = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, imports: renderImports, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, budget: renderBudget, vehicule: renderVehicule, salaire: renderSalaire, factures: renderFactures, stats: renderStats };
+      const renderers = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, imports: renderImports, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, budget: renderBudget, vehicule: renderVehicule, salaire: renderSalaire, factures: renderFactures, stats: renderStats, analyses: renderAnalyses };
       if (renderers[pid]) renderers[pid]();
       if (pid === 'dashboard') fetchFinancialNews();
     }
@@ -4814,6 +4816,157 @@ const EmeraudeCore = (() => {
     return { items, total: t };
   }
 
+  // ── Historique du patrimoine par classe d'actifs : fins de mois + aujourd'hui ──
+  // Chaque série est ancrée sur la valeur actuelle (snap, celle du tableau de bord) :
+  //   valeur(d) = actuelle + modèle(d) − modèle(aujourd'hui).
+  // banque : soldes datés des comptes ; portefeuille : valeur journalière des titres (pf.valeurJour), avant elle
+  // achats − ventes ; crypto : quantités à la date × cours actuels ; immobilier : appels VEFA payés à la date
+  // (HT + TVA à récupérer), autres biens à partir de leur date d'achat ; dettes : capital restant dû des prêts ;
+  // liquidités, métaux, biens, business : sans historique (constantes).
+  const PATRIMOINE_CLASSES = ['immobilier', 'portefeuille', 'banque', 'crypto', 'cash', 'metaux', 'biens', 'business'];
+  function finsDeMois(today, n) {
+    const [y, m] = today.split('-').map(Number), out = [];
+    for (let i = n - 1; i >= 1; i--) out.push(new Date(Date.UTC(y, m - i, 0)).toISOString().slice(0, 10));
+    out.push(today);
+    return out;
+  }
+  function historiquePatrimoine(data, snap, opts) {
+    opts = opts || {};
+    const today = opts.today, dates = finsDeMois(today, Math.max(2, +opts.mois || 12));
+    const ancre = (k, f) => { const cur = f(today); return dates.map(d => round2((+snap[k] || 0) + f(d) - cur)); };
+    const classes = {};
+    const accs = [];
+    (data.banks || []).forEach(b => (b.accounts || []).forEach(a => accs.push(a)));
+    classes.banque = ancre('banque', d => accs.reduce((s, a) => s + balanceAt(a, d), 0));
+    // Portefeuille
+    const pf = data.portefeuille || {}, vj = pf.valeurJour || {}, vjDates = Object.keys(vj).sort();
+    const vjAt = d => { let k = null; for (const x of vjDates) { if (x <= d) k = x; else break; } return k == null ? null : +vj[k]; };
+    const opsApres = d => (pf.operations || []).reduce((s, o) => { const x = toISO(o.date), ty = o.type;
+      return x && x > d ? s + (ty === 'achat' ? 1 : ty === 'vente' ? -1 : 0) * Math.abs(+o.total || 0) : s; }, 0);
+    const vjToday = vjAt(today);
+    classes.portefeuille = dates.map(d => {
+      const p0 = +snap.portefeuille || 0;
+      if (vjToday != null) {
+        const v = vjAt(d);
+        if (v != null) return round2(p0 + v - vjToday);
+        const first = vjDates[0];
+        return round2(Math.max(0, p0 + vj[first] - vjToday - (opsApres(d) - opsApres(first))));
+      }
+      return round2(Math.max(0, p0 - opsApres(d)));
+    });
+    // Crypto : quantités à la date (transactions postérieures retirées) × cours actuels
+    classes.crypto = ancre('crypto', d => (data.cryptoWallets || []).reduce((s, w) => s + (w.assets || []).reduce((t, a) => {
+      const apres = (w.transactions || []).reduce((q, x) => x.symbol === a.symbol && (toISO(x.date) || '') > d ? q + (CRYPTO_IN.has(x.type) ? 1 : -1) * Math.abs(+x.qte || 0) : q, 0);
+      return t + Math.max(0, (+a.qte || 0) - apres) * (+a.prix || 0);
+    }, 0), 0));
+    // Immobilier
+    const ctx0 = { prets: [], accounts: [], today, tmi: 0 };
+    classes.immobilier = ancre('immobilier', d => (data.immobilierBiens || []).reduce((s, b) => {
+      if (b.vefa && !+b.valeurActuelle) {
+        // Un appel financé par un déblocage de prêt compte dès le déblocage (fonds versés au notaire / promoteur
+        // avant la date de l'appel) : sinon la dette apparaîtrait quelques jours sans le bien correspondant
+        const debs = (data.prets || []).filter(p => (b.pretIds || []).includes(p.id)).flatMap(p => deblocages(p).map(x => x.date)).sort();
+        const eff = l => { const lim = addMonthsISO(l.date, -1); return debs.filter(x => x <= l.date && x >= lim).shift() || l.date; };
+        const pay = vefaPlan(b.vefa).filter(l => l.paye && l.date && eff(l) <= d);
+        const tva = pay.reduce((x, l) => x + l.tva, 0);
+        const rec = (b.vefa.tvaRecuperee || []).filter(r => (toISO(r.date) || '') <= d).reduce((x, r) => x + (+r.montant || 0), 0);
+        return s + pay.reduce((x, l) => x + l.ht, 0) + Math.max(0, tva - rec);
+      }
+      const achat = toISO(b.dateAchat);
+      if (achat && achat > d) return s;
+      const a = immoAnalyse(b, ctx0);
+      return s + a.valeur + a.tva.aRecuperer;
+    }, 0));
+    ['cash', 'metaux', 'biens', 'business'].forEach(k => { classes[k] = dates.map(() => round2(+snap[k] || 0)); });
+    const dettesAuj = Math.abs(+snap.emprunts || 0);
+    const crdAt = d => (data.prets || []).reduce((s, p) => s + loanAt(p, d).crd, 0);
+    const crdToday = crdAt(today);
+    const dettes = dates.map(d => round2(Math.max(0, dettesAuj + crdAt(d) - crdToday)));
+    const inst = opts.instantanes || {}, exact = dates.map(() => false);
+    dates.forEach((d, i) => {
+      if (i === dates.length - 1) return;
+      const s = inst[d.slice(0, 7)];
+      if (!s || !s.date || s.date > d || s.date.slice(0, 7) !== d.slice(0, 7)) return;
+      PATRIMOINE_CLASSES.forEach(k => { if (s.classes && s.classes[k] != null) classes[k][i] = round2(+s.classes[k]); });
+      if (s.dettes != null) dettes[i] = round2(+s.dettes);
+      exact[i] = true;
+    });
+    const actifs = dates.map((_, i) => round2(PATRIMOINE_CLASSES.reduce((s, k) => s + classes[k][i], 0)));
+    const net = actifs.map((v, i) => round2(v - (opts.sansPrets ? 0 : dettes[i])));
+    return { dates, classes, actifs, dettes, net, exact, sansPrets: !!opts.sansPrets };
+  }
+
+  // ── Analyses du patrimoine ──
+  // Instantané du jour (valeurs figées par classe) : enregistré une fois par jour, il remplace le modèle
+  // pour les mois passés dans historiquePatrimoine (le dernier vu dans le mois fait foi).
+  function instantane(snap, today) {
+    const classes = {};
+    PATRIMOINE_CLASSES.forEach(k => { classes[k] = round2(+snap[k] || 0); });
+    return { date: today, classes, dettes: round2(Math.abs(+snap.emprunts || 0)) };
+  }
+  // Variations mois par mois et sur toute la période, par classe
+  function analyseVariations(H) {
+    const n = H.dates.length, mois = [];
+    for (let i = 1; i < n; i++) {
+      const c = {};
+      PATRIMOINE_CLASSES.forEach(k => { c[k] = round2(H.classes[k][i] - H.classes[k][i - 1]); });
+      mois.push({ date: H.dates[i], classes: c, dettes: round2(H.dettes[i] - H.dettes[i - 1]), net: round2(H.net[i] - H.net[i - 1]) });
+    }
+    const periode = {};
+    PATRIMOINE_CLASSES.forEach(k => { periode[k] = round2(H.classes[k][n - 1] - H.classes[k][0]); });
+    return { mois, periode, dettes: round2(H.dettes[n - 1] - H.dettes[0]), debut: H.net[0], fin: H.net[n - 1] };
+  }
+  // Compte disponible (courant, livrets, LMNP…) ou placé (PEA, assurance-vie, parts sociales, PEL, PER…)
+  function classerCompte(type) {
+    const s = String(type || '');
+    if (/pea|assurance|vie|parts|pel\b|per\b|retraite|titres|bourse/i.test(s)) return 'placement';
+    return /courant|livret|ldd|lep|lmnp|cel\b|joint|individuel|d[ée]p[oô]t/i.test(s) ? 'disponible' : 'placement';
+  }
+  // Ce qui a été versé vs ce que vaut l'enveloppe aujourd'hui (PEA, portefeuilles crypto)
+  function performanceApports(data) {
+    const out = [];
+    const pf = data.portefeuille || {}, pea = pf.pea || {};
+    const titres = (pf.positions || []).reduce((s, x) => s + (+x.quantite || 0) * (+x.prixActuel || 0), 0);
+    const edition = toISO(pea.dateEdition) || '';
+    const versOps = (pf.operations || []).filter(o => toISO(o.date) > edition).reduce((s, o) =>
+      s + (o.type === 'versement' ? 1 : o.type === 'retrait' ? -1 : 0) * Math.abs(+o.total || 0), 0);
+    const versements = round2((+pea.versementsCumules || +pea.versementsCumul || 0) - (+pea.retraitsCumules || 0) + versOps);
+    if (titres || versements) {
+      const pru = (pf.positions || []).reduce((s, x) => s + (+x.quantite || 0) * (+x.prixMoyenAchat || +x.pru || 0), 0);
+      out.push({ k: 'portefeuille', nom: pea.nom ? 'PEA' : 'Portefeuille', apports: versements, valeur: round2(titres + (+pea.soldeEspeces || 0)),
+        latente: pru ? round2(titres - pru) : null });
+    }
+    (data.cryptoWallets || []).forEach(w => {
+      const tx = w.transactions || [];
+      const frais = t => /fee|frais/i.test(String(t.note || ''));
+      const dep = tx.filter(x => x.type === 'depot').reduce((s, x) => s + Math.abs(+x.montant || 0), 0);
+      const ret = tx.filter(x => x.type === 'retrait' && !frais(x)).reduce((s, x) => s + Math.abs(+x.montant || 0), 0);
+      const val = (w.assets || []).reduce((s, a) => s + (+a.qte || 0) * (+a.prix || 0), 0);
+      if (dep || val) out.push({ k: 'crypto', nom: w.name || 'Crypto', apports: round2(dep - ret), valeur: round2(val), latente: null });
+    });
+    out.forEach(o => { o.gain = round2(o.valeur - o.apports); o.pct = o.apports > 0 ? o.gain / o.apports : null; });
+    return out;
+  }
+  // Projection mois par mois : chaque classe capitalise à son rendement annuel (%), l'épargne mensuelle va dans
+  // la classe versEpargne, les dettes suivent le tableau fourni (dettes[i] = restant dû au mois i).
+  function projeterPatrimoine(p) {
+    const cls = {};
+    PATRIMOINE_CLASSES.forEach(k => { cls[k] = +(p.depart || {})[k] || 0; });
+    const series = {}, actifs = [], net = [];
+    PATRIMOINE_CLASSES.forEach(k => { series[k] = []; });
+    const dette = i => +(p.dettes || [])[Math.min(i, (p.dettes || []).length - 1)] || 0;
+    const noter = i => { let a = 0; PATRIMOINE_CLASSES.forEach(k => { series[k].push(round2(cls[k])); a += cls[k]; }); actifs.push(round2(a)); net.push(round2(a - dette(i))); };
+    noter(0);
+    for (let i = 1; i <= p.mois; i++) {
+      PATRIMOINE_CLASSES.forEach(k => { cls[k] *= Math.pow(1 + (+(p.rendements || {})[k] || 0) / 100, 1 / 12); });
+      if (p.versEpargne) cls[p.versEpargne] += +p.epargne || 0;
+      noter(i);
+    }
+    return { classes: series, actifs, net };
+  }
+  // Premier mois (index) où la série atteint la cible, sinon null
+  const moisAtteinte = (serie, cible) => { const i = (serie || []).findIndex(v => v >= cible); return i < 0 ? null : i; };
+
   // ── Version de l'application (recherche de mise à jour) ──
   // build = « aaaammjj-hhmm-empreinte », inscrit par publier.ps1 ; tout autre texte = fichier non publié
   function buildInfo(build) {
@@ -5399,7 +5552,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese, PATRIMOINE_CLASSES, finsDeMois, historiquePatrimoine, instantane, analyseVariations, classerCompte, performanceApports, projeterPatrimoine, moisAtteinte };
 })();
 // IMPORT_CORE_END
 
@@ -5753,6 +5906,8 @@ function ensureDataShape(opts) {
   if (!Array.isArray(DATA.banks)) DATA.banks = [];
   if (!Array.isArray(DATA.prets)) DATA.prets = [];
   if (!Array.isArray(DATA.placements_banque)) DATA.placements_banque = [];
+  if (!Array.isArray(DATA.objectifs)) DATA.objectifs = [];
+  if (!DATA.instantanes || typeof DATA.instantanes !== 'object' || Array.isArray(DATA.instantanes)) DATA.instantanes = {};
 
   if (!DATA.portefeuille || typeof DATA.portefeuille !== 'object' || Array.isArray(DATA.portefeuille)) {
     DATA.portefeuille = {};
@@ -5828,7 +5983,7 @@ function importData(onDone) {
         ensureDataShape();
         saveData(); render();
         const pid = document.querySelector('.nav-item.active')?.dataset.page;
-        const map = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, stats: renderStats, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, factures: renderFactures };
+        const map = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, stats: renderStats, analyses: renderAnalyses, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, factures: renderFactures };
         if (pid && map[pid]) map[pid]();
         if (onDone) onDone(); else alert('✓ Données importées avec succès.');
       } catch(err) { alert('Erreur : fichier JSON invalide.'); }
@@ -5851,7 +6006,7 @@ function forceSyncWithJSON(onDone) {
         replaceDataSnapshot(d);
         saveData(); render();
         const pid = document.querySelector('.nav-item.active')?.dataset.page;
-        const map = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, stats: renderStats, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, factures: renderFactures };
+        const map = { dashboard: render, banque: renderBanque, emprunts: renderEmprunts, portefeuille: renderPortefeuille, crypto: renderCrypto, parametres: renderParametres, stats: renderStats, analyses: renderAnalyses, cash: renderLiquidites, metaux: renderMetaux, proprietes: renderBiensPersonnels, immobilier: renderImmobilier, business: renderBusiness, factures: renderFactures };
         if (pid && map[pid]) map[pid]();
         if (onDone) onDone(); else alert('✓ Synchronisation forcée terminée : cache remplacé par le JSON.');
       } catch(err) {
@@ -6040,6 +6195,21 @@ function collectHistoricalFlows() {
 }
 
 function rebuildHistorySeries(snapshot) {
+  // Historique par classe d'actifs (EmeraudeCore.historiquePatrimoine) ; repli sur l'ancien calcul en cas d'erreur
+  let mois = 12;
+  try { mois = +SETTINGS.evoMois || 12; } catch (e) {}
+  try {
+    // Instantané du mois en cours : dernière valeur vue (pas d'enregistrement forcé : part avec la prochaine sauvegarde)
+    if (!DATA.instantanes || typeof DATA.instantanes !== 'object' || Array.isArray(DATA.instantanes)) DATA.instantanes = {};
+    if ((+snapshot.actifs || 0) > 0) DATA.instantanes[todayISO().slice(0, 7)] = EmeraudeCore.instantane(snapshot, todayISO());
+    const H = EmeraudeCore.historiquePatrimoine(DATA, snapshot, { today: todayISO(), mois: mois + 1, sansPrets: !!snapshot.sansPrets, instantanes: DATA.instantanes });
+    PAT_HIST = H;
+    DATA.monthLabels = H.dates.map(d => new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { month: 'short' }));
+    DATA.evolution = H.net.map(v => Math.round(v));
+    DATA.sparklines = DATA.sparklines || {};
+    ['banque', 'portefeuille', 'crypto'].forEach(k => { DATA.sparklines[k] = H.classes[k].map(v => +(v / 1000).toFixed(1)); });
+    return;
+  } catch (e) { console.warn('Historique du patrimoine :', e); PAT_HIST = null; }
   const months = buildLast12Months();
   const monthKeys = months.map(monthKey);
   DATA.monthLabels = months.map(d => d.toLocaleDateString('fr-FR', { month: 'short' }));
@@ -6063,6 +6233,334 @@ function recalculateDerivedData() {
   DATA.patrimoine = Object.assign({}, DATA.patrimoine || {}, snapshot);
   rebuildHistorySeries(snapshot);
   return snapshot;
+}
+
+// ......................................
+// ÉVOLUTION PATRIMONIALE PAR CLASSE D'ACTIFS
+// ......................................
+// Historique : EmeraudeCore.historiquePatrimoine (testé). Modes : empilé (actifs + dettes en négatif + net),
+// courbes, répartition en %, net (actifs bruts / dettes / net). Réglages propres à l'appareil (SETTINGS).
+const PAT_CLASSES = [['immobilier', 'Immobilier', '#10B981'], ['portefeuille', 'Portefeuille', '#3B82F6'], ['banque', 'Banque', '#F59E0B'],
+  ['crypto', 'Crypto', '#8B5CF6'], ['cash', 'Liquidités', '#14B8A6'], ['metaux', 'Métaux', '#FDE68A'], ['biens', 'Biens', '#F472B6'], ['business', 'Business', '#94A3B8']];
+const PAT_COULEUR = Object.fromEntries(PAT_CLASSES.map(([k, , c]) => [k, c]));
+const EV_MODES = [['empile', 'Empilé'], ['courbes', 'Courbes'], ['pct', 'Répartition %'], ['net', 'Net']];
+var PAT_HIST = null;  // var : affecté par rebuildHistorySeries, appelé avant cette ligne au chargement
+function evSet(k, v) { SETTINGS[k] = v; saveSettings(); if (k === 'evoMois') render(); else renderEvolution(); }
+function evToggle(k) {
+  const m = new Set(SETTINGS.evoMasques || []);
+  if (m.has(k)) m.delete(k); else m.add(k);
+  SETTINGS.evoMasques = [...m]; saveSettings(); renderEvolution();
+}
+function renderEvolution() {
+  const box = document.getElementById('ev-chart'), ctrl = document.getElementById('ev-ctrl');
+  const H = PAT_HIST;
+  if (!box || !ctrl || !H) return;
+  const mode = SETTINGS.evoMode || 'empile', mois = +SETTINGS.evoMois || 12;
+  const masques = new Set(SETTINGS.evoMasques || []);
+  ctrl.innerHTML = EV_MODES.map(([k, l]) => `<button type="button" class="${mode === k ? 'on' : ''}" onclick="evSet('evoMode', '${k}')">${l}</button>`).join('')
+    + `<span style="width:6px"></span>` + [6, 12, 24].map(n => `<button type="button" class="${mois === n ? 'on' : ''}" onclick="evSet('evoMois', ${n})">${n} m</button>`).join('');
+  const n = H.dates.length;
+  const presentes = PAT_CLASSES.filter(([k]) => H.classes[k].some(v => Math.abs(v) > 0.5));
+  const vis = presentes.filter(([k]) => !masques.has(k));
+  const sansPrets = typeof patrimoineSansPrets === 'function' && patrimoineSansPrets();
+  const W = 560, Ht = 190, pl = 46, pr = 8, pt = 8, pb = 20;
+  const X = i => pl + (n === 1 ? 0 : i * (W - pl - pr) / (n - 1));
+  const somme = i => vis.reduce((s, [k]) => s + Math.max(0, H.classes[k][i]), 0);
+  let lo = 0, hi = 1, svg = '';
+  if (mode === 'empile') { hi = Math.max(1, ...H.dates.map((_, i) => somme(i))); lo = sansPrets ? 0 : -Math.max(0, ...H.dettes); }
+  else if (mode === 'courbes') { const all = vis.flatMap(([k]) => H.classes[k]).concat(H.net); hi = Math.max(1, ...all); lo = Math.min(0, ...all); }
+  else if (mode === 'pct') { hi = 100; lo = 0; }
+  else { const all = H.actifs.concat(H.net, sansPrets ? [] : H.dettes.map(x => -x)); hi = Math.max(1, ...all); lo = Math.min(0, ...all); }
+  if (hi - lo < 1) hi = lo + 1;
+  const Y = v => pt + (1 - (v - lo) / (hi - lo)) * (Ht - pt - pb);
+  const P = arr => arr.map((v, i) => [X(i), Y(v)]);
+  const bande = (top, bot, col, op) => `<path d="${bezierPath(P(top))} L${X(n - 1).toFixed(1)},${Y(bot[n - 1]).toFixed(1)} ${bezierPath(P(bot).reverse()).slice(1)} Z" fill="${col}" fill-opacity="${op}" stroke="none"/>`;
+  const ligne = (arr, col, w, dash) => `<path d="${bezierPath(P(arr))}" fill="none" stroke="${col}" stroke-width="${w}" ${dash ? `stroke-dasharray="${dash}"` : ''} stroke-linecap="round"/>`;
+  const fe = v => Math.abs(v) >= 1000 ? Math.round(v / 1000) + ' k€' : Math.round(v) + ' €';
+  const fk = v => mode === 'pct' ? Math.round(v) + ' %' : fe(v);
+  // Grille et axe
+  for (let g = 0; g <= 4; g++) { const v = lo + (hi - lo) * g / 4; svg += `<line x1="${pl}" x2="${W - pr}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,0.05)"/><text x="${pl - 5}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--text-4)">${fk(v)}</text>`; }
+  if (lo < 0) svg += `<line x1="${pl}" x2="${W - pr}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}" stroke="rgba(255,255,255,0.18)"/>`;
+  if (mode === 'empile' || mode === 'pct') {
+    let base = new Array(n).fill(0);
+    vis.forEach(([k, , c]) => {
+      const top = base.map((b, i) => b + (mode === 'pct' ? (somme(i) ? Math.max(0, H.classes[k][i]) / somme(i) * 100 : 0) : Math.max(0, H.classes[k][i])));
+      svg += bande(top, base, c, 0.55) + ligne(top, c, 1);
+      base = top;
+    });
+    if (mode === 'empile') {
+      if (!sansPrets && H.dettes.some(x => x > 0.5)) svg += bande(new Array(n).fill(0), H.dettes.map(x => -x), '#EF4444', 0.35) + ligne(H.dettes.map(x => -x), '#EF4444', 1.2);
+      svg += ligne(H.net, '#F8FAFC', 2.2) ;
+    }
+  } else if (mode === 'courbes') {
+    vis.forEach(([k, , c]) => { svg += ligne(H.classes[k], c, 1.8); });
+    svg += ligne(H.net, '#F8FAFC', 2.2, '5 3');
+  } else {
+    svg += bande(H.net, H.net.map(() => Math.max(lo, 0)), '#10B981', 0.18) + ligne(H.actifs, '#60A5FA', 1.6, '4 3');
+    if (!sansPrets) svg += ligne(H.dettes.map(x => -x), '#EF4444', 1.6, '4 3');
+    svg += ligne(H.net, '#34D399', 2.4);
+  }
+  // Mois (abscisses) et info-bulles par colonne
+  const lab = d => new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { month: 'short' }) + (d.slice(5, 7) === '01' ? ' ' + d.slice(2, 4) : '');
+  const pas = n > 13 ? 3 : 1;
+  H.dates.forEach((d, i) => {
+    if (i % pas === 0 || i === n - 1) svg += `<text x="${X(i).toFixed(1)}" y="${Ht - 6}" text-anchor="middle" font-size="8.5" fill="var(--text-4)">${i === n - 1 ? 'auj.' : lab(d)}</text>`;
+    const det = presentes.map(([k, l]) => `${l} : ${fmtE(H.classes[k][i])} €`).join('\n');
+    const w = (W - pl - pr) / Math.max(1, n - 1);
+    svg += `<rect x="${(X(i) - w / 2).toFixed(1)}" y="${pt}" width="${w.toFixed(1)}" height="${Ht - pt - pb}" fill="transparent"><title>${EmeraudeCore.isoToFr(d)}\nPatrimoine net : ${fmtE(H.net[i])} €\nActifs bruts : ${fmtE(H.actifs[i])} €\nDettes : ${fmtE(H.dettes[i])} €${sansPrets ? ' (non déduites)' : ''}\n—\n${det}</title></rect>`;
+  });
+  svg += `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(mode === 'pct' ? 100 : H.net[n - 1]).toFixed(1)}" r="${mode === 'pct' ? 0 : 3.5}" fill="#F8FAFC"/>`;
+  // Légende cliquable (valeur actuelle et variation sur la période)
+  const varia = arr => arr[n - 1] - arr[0];
+  const chip = (k, l, c, arr, off, fixe) => { const dv = varia(arr);
+    return `<button type="button" class="ev-chip${off ? ' off' : ''}" ${fixe ? 'style="cursor:default"' : `onclick="evToggle('${k}')"`} title="${fixe ? '' : 'Afficher / masquer'}"><i style="background:${c}"></i>${l} <b>${fe(arr[n - 1])}</b>
+      <span style="color:${dv >= 0 ? 'var(--em-bright)' : '#F87171'}">${dv >= 0 ? '+' : '−'}${fe(Math.abs(dv))}</span></button>`; };
+  const legend = presentes.map(([k, l, c]) => chip(k, l, c, H.classes[k], masques.has(k))).join('')
+    + (H.dettes.some(x => x > 0.5) ? chip('_d', 'Dettes' + (sansPrets ? ' (non déduites)' : ''), '#EF4444', H.dettes, false, true) : '')
+    + chip('_n', sansPrets ? 'Total hors prêts' : 'Net', '#F8FAFC', H.net, false, true);
+  // Synthèse : variation et principales contributions
+  const dNet = varia(H.net), dAct = varia(H.actifs), dDet = varia(H.dettes);
+  const contrib = presentes.map(([k, l]) => [l, varia(H.classes[k])]).filter(x => Math.abs(x[1]) >= 1).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 3);
+  const pct0 = H.net[0] ? ` (${dNet >= 0 ? '+' : ''}${(dNet / Math.abs(H.net[0]) * 100).toFixed(1).replace('.', ',')} %)` : '';
+  const sum = `Sur ${n - 1} mois : ${sansPrets ? 'total' : 'net'} <b style="color:${dNet >= 0 ? 'var(--em-bright)' : '#F87171'}">${dNet >= 0 ? '+' : '−'}${fmtE(Math.abs(dNet))} €</b>${pct0}
+    · actifs bruts ${dAct >= 0 ? '+' : '−'}${fmtE(Math.abs(dAct))} € · dettes ${dDet >= 0 ? '+' : '−'}${fmtE(Math.abs(dDet))} €
+    ${contrib.length ? `<br>Principales variations : ${contrib.map(([l, v]) => `${l} ${v >= 0 ? '+' : '−'}${fmtE(Math.abs(v))} €`).join(' · ')}` : ''}
+    <br><span style="color:var(--text-4)">Soldes bancaires datés, valeur journalière du PEA si disponible, crypto aux cours actuels, immobilier selon les appels payés ; liquidités, métaux, biens et business sans historique.</span>`;
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${Ht}" style="width:100%;height:auto;display:block" role="img" aria-label="Évolution du patrimoine par classe d’actifs">${svg}</svg>
+    <div class="ev-legend">${legend}</div><div class="ev-sum">${sum}</div>`;
+}
+
+// ......................................
+// ANALYSES DU PATRIMOINE
+// ......................................
+// Ratios, décomposition de la variation, carte de chaleur, performance vs apports, taux d'épargne,
+// comparaison au CAC 40, projection, objectifs. Calculs : EmeraudeCore (historiquePatrimoine,
+// analyseVariations, performanceApports, projeterPatrimoine, moisAtteinte, classerCompte), testés.
+const PROJ_DEFAUT = { ans: 20, epargne: null, vers: 'portefeuille', engagements: true,
+  rend: { immobilier: 2, portefeuille: 6, banque: 1.5, crypto: 5, cash: 0, metaux: 3, biens: 0, business: 0 } };
+const anaProj = () => { const s = SETTINGS.proj || {}; return Object.assign({}, PROJ_DEFAUT, s, { rend: Object.assign({}, PROJ_DEFAUT.rend, s.rend || {}) }); };
+function anaSetProj(k, v, classe) {
+  const s = anaProj();
+  if (k === 'rend') s.rend[classe] = parseFloat(String(v).replace(',', '.')) || 0;
+  else if (k === 'epargne') { const x = String(v).trim().replace(',', '.'); s.epargne = x === '' ? null : (parseFloat(x) || 0); }
+  else if (k === 'engagements') s.engagements = !!v;
+  else s[k] = k === 'ans' ? +v : v;
+  SETTINGS.proj = s; saveSettings(); renderAnalyses();
+}
+const anaPct = v => v == null || !isFinite(v) ? '—' : (v * 100).toFixed(1).replace('.', ',') + ' %';
+const anaK = v => (v < 0 ? '−' : '') + (Math.abs(v) >= 1000 ? (Math.abs(v) / 1000).toFixed(Math.abs(v) >= 100000 ? 0 : 1).replace('.', ',') + ' k€' : Math.round(Math.abs(v)) + ' €');
+const anaYm = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+function anaBudgetMois(n) {
+  // n derniers mois (le mois en cours inclus) selon les réglages du Budget
+  const ctx = typeof budCtx === 'function' ? budCtx() : { today: todayISO() };
+  const cur = todayISO().slice(0, 7), out = [];
+  for (let i = n - 1; i >= 0; i--) { try { out.push(EmeraudeCore.budgetMonth(DATA, anaYm(cur, -i), ctx)); } catch (e) {} }
+  return out;
+}
+// Objectifs (dans les données : partagés entre appareils)
+const OBJ_MESURES = [['net', 'Patrimoine net'], ['actifs', 'Actifs bruts'], ['disponible', 'Épargne disponible']].concat(PAT_CLASSES.map(([k, l]) => ['classe:' + k, l]));
+function anaObjAjouter() {
+  const nom = document.getElementById('obj-nom')?.value.trim(), mesure = document.getElementById('obj-mesure')?.value;
+  const cible = parseFloat(String(document.getElementById('obj-cible')?.value || '').replace(',', '.')) || 0;
+  if (!nom || !(cible > 0)) { alert('Nom et montant cible obligatoires.'); return; }
+  (DATA.objectifs = DATA.objectifs || []).push({ id: 'obj-' + Date.now().toString(36), nom, mesure, cible });
+  saveData(); renderAnalyses();
+}
+function anaObjSuppr(id) { if (!confirm('Supprimer cet objectif ?')) return; DATA.objectifs = (DATA.objectifs || []).filter(o => o.id !== id); saveData(); renderAnalyses(); }
+
+function renderAnalyses() {
+  const root = document.getElementById('analyses-root');
+  if (!root) return;
+  const P = recalculateDerivedData();
+  const H = PAT_HIST;
+  const today = todayISO();
+  const tile = (lbl, val, sub, cls) => `<div class="immo-kpi"><div class="immo-kpi-val ${cls || ''}">${val}</div><div class="immo-kpi-lbl">${lbl}</div>${sub ? `<div class="immo-kpi-sub">${sub}</div>` : ''}</div>`;
+  const note = s => `<div style="font-size:0.66rem;color:var(--text-4);margin-top:8px;line-height:1.5">${s}</div>`;
+  const actifs = P.actifs != null ? P.actifs : PAT_CLASSES.reduce((s, [k]) => s + (+P[k] || 0), 0);
+  const dettes = Math.abs(P.emprunts || 0);
+  const net = actifs - dettes;
+
+  // ── 1. Ratios ──
+  let dispo = (DATA.liquidites || []).reduce((s, x) => s + (+x.solde || 0), 0), place = 0;
+  (DATA.banks || []).forEach(b => (b.accounts || []).forEach(a => { if (EmeraudeCore.classerCompte(a.type || a.nom) === 'disponible') dispo += +a.solde || 0; else place += +a.solde || 0; }));
+  const immoIds = new Set((DATA.immobilierBiens || []).flatMap(b => (b.pretIds || []).concat((b.tva || {}).pretId ? [b.tva.pretId] : [])));
+  const detteImmo = (DATA.prets || []).filter(x => immoIds.has(x.id)).reduce((s, x) => s + EmeraudeCore.loanAt(x, today).crd, 0);
+  const bud = anaBudgetMois(13);
+  const complets = bud.filter(m => m.ym < today.slice(0, 7)).slice(-3);
+  const depMoy = complets.length ? complets.reduce((s, m) => s + m.depenses.total, 0) / complets.length : 0;
+  const revMoy = complets.length ? complets.reduce((s, m) => s + m.revenus.total, 0) / complets.length : 0;
+  const tauxEp = revMoy > 0 ? (revMoy - depMoy) / revMoy : null;
+  const ratios = `<div class="immo-kpis">
+      ${tile('Taux d’endettement', anaPct(actifs ? dettes / actifs : null), `${anaK(dettes)} de dettes / ${anaK(actifs)} d’actifs`, actifs && dettes / actifs > 0.5 ? 'amt-neg' : '')}
+      ${tile('LTV immobilier', anaPct(P.immobilier ? detteImmo / P.immobilier : null), `prêts des biens / valeur retenue`, P.immobilier && detteImmo / P.immobilier > 1 ? 'amt-neg' : '')}
+      ${tile('Épargne disponible', anaK(dispo), `${anaPct(actifs ? dispo / actifs : null)} des actifs · comptes courants, livrets, liquidités`)}
+      ${tile('Placée / bloquée', anaK(actifs - dispo), 'PEA, assurance-vie, crypto, immobilier, métaux…')}
+      ${tile('Mois de dépenses couverts', depMoy ? (dispo / depMoy).toFixed(1).replace('.', ',') : '—', depMoy ? `dépenses moyennes ${anaK(depMoy)}/mois (3 derniers mois)` : 'Budget sans dépenses', depMoy && dispo / depMoy < 3 ? 'amt-neg' : 'amt-pos')}
+      ${tile('Taux d’épargne', anaPct(tauxEp), revMoy ? `revenus ${anaK(revMoy)} − dépenses ${anaK(depMoy)} /mois` : 'Budget sans revenus', tauxEp == null ? '' : tauxEp >= 0 ? 'amt-pos' : 'amt-neg')}
+    </div>` + note('Disponible : comptes courants, livrets, comptes LMNP et liquidités. Repères usuels : endettement sous 50 %, 3 à 6 mois de dépenses en épargne de précaution.');
+
+  // ── 2. Décomposition de la variation (cascade) et carte de chaleur ──
+  let cascade = '', heat = '';
+  if (H && H.dates.length > 1) {
+    const V = EmeraudeCore.analyseVariations(H);
+    const n = H.dates.length;
+    const presentes = PAT_CLASSES.filter(([k]) => H.classes[k].some(v => Math.abs(v) > 0.5));
+    const pas = [['Début', V.debut, '#64748B', true]].concat(presentes.map(([k, l, c]) => [l, V.periode[k], c]).filter(x => Math.abs(x[1]) >= 1));
+    if (!H.sansPrets && Math.abs(V.dettes) >= 1) pas.push(['Dettes', -V.dettes, '#EF4444']);
+    pas.push(['Fin', V.fin, '#F8FAFC', true]);
+    let cum = 0;
+    const barres = pas.map(([l, v, c, total]) => { const b = total ? { l, c, lo: Math.min(0, v), hi: Math.max(0, v), v, total } : { l, c, lo: Math.min(cum, cum + v), hi: Math.max(cum, cum + v), v };
+      cum = total ? v : cum + v; return b; });
+    const lo = Math.min(0, ...barres.map(b => b.lo)), hi = Math.max(1, ...barres.map(b => b.hi));
+    const W = 560, Hh = 200, pl = 50, pb = 34, bw = (W - pl - 10) / barres.length;
+    const Y = v => 10 + (1 - (v - lo) / (hi - lo)) * (Hh - 10 - pb);
+    cascade = `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%;height:auto;display:block" role="img" aria-label="Décomposition de la variation">
+      ${[0, 0.25, 0.5, 0.75, 1].map(f => { const v = lo + (hi - lo) * f; return `<line x1="${pl}" x2="${W - 6}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,0.05)"/><text x="${pl - 5}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--text-4)">${anaK(v)}</text>`; }).join('')}
+      ${barres.map((b, i) => { const x = pl + i * bw + bw * 0.15, w = bw * 0.7, y1 = Y(b.hi), y2 = Y(b.lo);
+        return `<rect x="${x.toFixed(1)}" y="${y1.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, y2 - y1).toFixed(1)}" rx="2" fill="${b.c}" fill-opacity="${b.total ? 0.5 : 0.85}"><title>${impEsc(b.l)} : ${fmtE(b.v)} €</title></rect>
+          <text x="${(x + w / 2).toFixed(1)}" y="${(y1 - 3).toFixed(1)}" text-anchor="middle" font-size="8.5" fill="${b.total ? 'var(--text-2)' : b.v >= 0 ? 'var(--em-bright)' : '#F87171'}">${b.total ? '' : b.v >= 0 ? '+' : ''}${anaK(b.v)}</text>
+          <text x="${(x + w / 2).toFixed(1)}" y="${Hh - 18}" text-anchor="middle" font-size="8.5" fill="var(--text-3)">${impEsc(b.l)}</text>`; }).join('')}
+    </svg>` + note(`Du ${EmeraudeCore.isoToFr(H.dates[0])} à aujourd’hui (${n - 1} mois, réglable sur le tableau de bord). Chaque barre : ce que la classe a ajouté ou retiré au ${H.sansPrets ? 'total' : 'patrimoine net'}.`);
+    // Carte de chaleur : variation mensuelle par classe
+    const lignes = presentes.map(([k, l, c]) => [l, c, V.mois.map(m => m.classes[k])]);
+    if (!H.sansPrets) lignes.push(['Dettes', '#EF4444', V.mois.map(m => -m.dettes)]);
+    lignes.push([H.sansPrets ? 'Total' : 'Net', '#F8FAFC', V.mois.map(m => m.net)]);
+    const mx = Math.max(1, ...lignes.flatMap(l => l[2].map(Math.abs)));
+    const mois = V.mois.map(m => new Date(m.date + 'T12:00:00').toLocaleDateString('fr-FR', { month: 'short' }));
+    heat = `<div style="overflow-x:auto"><table class="tbl" style="font-size:0.66rem;min-width:620px"><thead><tr><th></th>${mois.map((m, i) => `<th style="text-align:center;padding:4px 2px">${i === mois.length - 1 ? 'auj.' : m}${H.exact && H.exact[i + 1] ? '•' : ''}</th>`).join('')}</tr></thead><tbody>
+      ${lignes.map(([l, c, vals]) => `<tr><td style="white-space:nowrap"><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c};margin-right:5px"></i>${impEsc(l)}</td>
+        ${vals.map(v => { const a = Math.min(0.85, Math.abs(v) / mx * 0.85 + (Math.abs(v) >= 1 ? 0.08 : 0)); return `<td title="${fmtE(v)} €" style="text-align:center;padding:5px 2px;background:${v >= 0 ? `rgba(16,185,129,${a.toFixed(2)})` : `rgba(239,68,68,${a.toFixed(2)})`};color:var(--text-1)">${Math.abs(v) >= 1 ? anaK(v) : '·'}</td>`; }).join('')}</tr>`).join('')}
+      </tbody></table></div>` + note('Vert : hausse, rouge : baisse ; intensité proportionnelle au montant. • = mois tiré d’un instantané enregistré (valeurs exactes).');
+  }
+
+  // ── 3. Performance vs apports ──
+  const perf = EmeraudeCore.performanceApports(DATA);
+  const perfHtml = perf.length ? impTable(['Enveloppe', 'Versé (net)', 'Valeur', 'Gain', 'Rendement', 'Plus-value latente'], perf.map(o => `<tr>
+      <td><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${PAT_COULEUR[o.k]};margin-right:5px"></i>${impEsc(o.nom)}</td>
+      <td style="text-align:right">${fmtE(o.apports)} €</td><td style="text-align:right">${fmtE(o.valeur)} €</td>
+      <td style="text-align:right" class="${o.gain >= 0 ? 'amt-pos' : 'amt-neg'}">${o.gain >= 0 ? '+' : ''}${fmtE(o.gain)} €</td>
+      <td style="text-align:right" class="${(o.pct || 0) >= 0 ? 'amt-pos' : 'amt-neg'}">${anaPct(o.pct)}</td>
+      <td style="text-align:right">${o.latente == null ? '—' : fmtE(o.latente) + ' €'}</td></tr>`))
+    + note('Gain = valeur − versements nets : ce que les marchés ont rapporté (ou coûté), indépendamment de ce que vous avez ajouté. PEA : versements cumulés du relevé + versements importés depuis ; crypto : dépôts − retraits (frais de gestion exclus). Assurance-vie : versements non connus.')
+    : '<div style="font-size:0.75rem;color:var(--text-4)">Pas de PEA ni de crypto avec des versements connus.</div>';
+
+  // ── 4. Taux d'épargne mensuel ──
+  const mb = bud.slice(-12);
+  const maxB = Math.max(1, ...mb.map(m => Math.max(m.revenus.total, m.depenses.total)));
+  const epargne = mb.some(m => m.revenus.total || m.depenses.total) ? (() => {
+    const W = 560, Hh = 170, pl = 40, pb = 30, bw = (W - pl - 10) / mb.length;
+    const Y = v => 10 + (1 - v / maxB) * (Hh - 10 - pb);
+    return `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%;height:auto;display:block" role="img" aria-label="Revenus, dépenses et taux d’épargne">
+      ${mb.map((m, i) => { const x = pl + i * bw, w = bw * 0.36, cur = m.ym === today.slice(0, 7);
+        return `<rect x="${(x + bw * 0.1).toFixed(1)}" y="${Y(m.revenus.total).toFixed(1)}" width="${w.toFixed(1)}" height="${(Y(0) - Y(m.revenus.total)).toFixed(1)}" fill="#10B981" fill-opacity="${cur ? 0.45 : 0.8}"><title>Revenus ${fmtE(m.revenus.total)} €</title></rect>
+          <rect x="${(x + bw * 0.1 + w).toFixed(1)}" y="${Y(m.depenses.total).toFixed(1)}" width="${w.toFixed(1)}" height="${(Y(0) - Y(m.depenses.total)).toFixed(1)}" fill="#EF4444" fill-opacity="${cur ? 0.45 : 0.75}"><title>Dépenses ${fmtE(m.depenses.total)} €</title></rect>
+          <text x="${(x + bw / 2).toFixed(1)}" y="${Hh - 18}" text-anchor="middle" font-size="8.5" fill="var(--text-4)">${new Date(m.ym + '-15T12:00:00').toLocaleDateString('fr-FR', { month: 'short' })}</text>
+          <text x="${(x + bw / 2).toFixed(1)}" y="${Hh - 6}" text-anchor="middle" font-size="8.5" fill="${m.tauxEpargne == null ? 'var(--text-4)' : m.tauxEpargne >= 0 ? 'var(--em-bright)' : '#F87171'}">${m.tauxEpargne == null ? '—' : Math.round(m.tauxEpargne * 100) + ' %'}</text>`; }).join('')}
+      <text x="${pl - 5}" y="${(Y(maxB) + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--text-4)">${anaK(maxB)}</text>
+    </svg>` + note('Revenus (vert) et dépenses (rouge) du Budget, taux d’épargne sous chaque mois. Mois en cours en clair (incomplet).'); })()
+    : '<div style="font-size:0.75rem;color:var(--text-4)">Aucun revenu ni dépense dans le Budget : programmez vos revenus et dépenses ou importez vos relevés.</div>';
+
+  // ── 5. Comparaison au CAC 40 (base 100) ──
+  let cac = '';
+  const hc = (DATA.portefeuille || {}).coursHist && DATA.portefeuille.coursHist['^FCHI'];
+  if (H && hc && Object.keys(hc.closes || {}).length) {
+    const base = arr => { const i0 = arr.findIndex(v => v > 0); return i0 < 0 ? null : arr.map((v, i) => i < i0 ? null : v / arr[i0] * 100); };
+    const series = [['CAC 40', '#DAA520', base(H.dates.map(d => EmeraudeCore.closeAt(hc, d) || 0))],
+      ['Portefeuille', PAT_COULEUR.portefeuille, base(H.classes.portefeuille)], [H.sansPrets ? 'Total' : 'Patrimoine net', '#F8FAFC', base(H.net)]].filter(s => s[2]);
+    const all = series.flatMap(s => s[2].filter(v => v != null));
+    const lo = Math.min(...all) * 0.98, hi = Math.max(...all) * 1.02, W = 560, Hh = 170, pl = 40, n = H.dates.length;
+    const X = i => pl + i * (W - pl - 10) / (n - 1), Y = v => 10 + (1 - (v - lo) / (hi - lo)) * (Hh - 40);
+    cac = `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%;height:auto;display:block" role="img" aria-label="Comparaison au CAC 40">
+      ${[lo, (lo + hi) / 2, hi].map(v => `<line x1="${pl}" x2="${W - 6}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,0.05)"/><text x="${pl - 5}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--text-4)">${Math.round(v)}</text>`).join('')}
+      ${series.map(([l, c, s]) => { const pts = s.map((v, i) => v == null ? null : [X(i), Y(v)]).filter(Boolean); return `<path d="${bezierPath(pts)}" fill="none" stroke="${c}" stroke-width="2"><title>${impEsc(l)}</title></path>`; }).join('')}
+    </svg><div class="ev-legend">${series.map(([l, c, s]) => `<span class="ev-chip" style="cursor:default"><i style="background:${c}"></i>${impEsc(l)} <b>${Math.round(s[s.length - 1])}</b></span>`).join('')}</div>`
+      + note('Base 100 au début de la période. Le portefeuille et le patrimoine incluent vos versements : l’écart avec l’indice mélange performance et épargne (voir « Performance vs apports »).');
+  } else cac = '<div style="font-size:0.75rem;color:var(--text-4)">Cours du CAC 40 pas encore relevés (actualisés avec les cours de bourse, via le relais Google).</div>';
+
+  // ── 6. Projection ──
+  const pr = anaProj();
+  const mois = pr.ans * 12;
+  const depart = {};
+  PAT_CLASSES.forEach(([k]) => { depart[k] = +P[k] || 0; });
+  let engDette = 0;
+  if (pr.engagements) {
+    const G = EmeraudeCore.immoGlobal((DATA.immobilierBiens || []).filter(b => b.vefa), { prets: DATA.prets || [], accounts: [], today, tmi: 0 });
+    G.items.forEach(a => { if (!a.vefa || !a.vefaEnCours) return; const f = a.vefa.financement || {};
+      depart.immobilier += a.vefa.resteTTC;            // reste à payer : HT + TVA (à récupérer), comme la valeur retenue
+      engDette += f.resteADebloquer || 0;
+      depart.banque -= (f.poche || {}).montant || 0; });
+  }
+  const dettesProj = [];
+  for (let i = 0; i <= mois; i++) {
+    const d = i ? new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1 + i, Math.min(28, +today.slice(8, 10)))).toISOString().slice(0, 10) : today;
+    dettesProj.push((DATA.prets || []).reduce((s, x) => s + EmeraudeCore.loanAt(x, d).crd, 0) + engDette);
+  }
+  const epAuto = revMoy ? Math.round(revMoy - depMoy) : 0;
+  const ep = pr.epargne == null ? epAuto : pr.epargne;
+  const PJ = EmeraudeCore.projeterPatrimoine({ depart, dettes: H && H.sansPrets ? dettesProj.map(() => 0) : dettesProj, epargne: ep, versEpargne: pr.vers, rendements: pr.rend, mois });
+  const projSvg = (() => {
+    const W = 560, Hh = 200, pl = 50, pb = 22;
+    const all = PJ.actifs.concat(PJ.net, dettesProj.map(v => -v));
+    const lo = Math.min(0, ...all), hi = Math.max(1, ...all);
+    const X = i => pl + i * (W - pl - 10) / mois, Y = v => 10 + (1 - (v - lo) / (hi - lo)) * (Hh - 10 - pb);
+    const step = Math.max(1, Math.round(mois / 60));
+    const pts = arr => arr.map((v, i) => [i, v]).filter(([i]) => i % step === 0 || i === mois).map(([i, v]) => [X(i), Y(v)]);
+    return `<svg viewBox="0 0 ${W} ${Hh}" style="width:100%;height:auto;display:block" role="img" aria-label="Projection du patrimoine">
+      ${[0, 0.25, 0.5, 0.75, 1].map(f => { const v = lo + (hi - lo) * f; return `<line x1="${pl}" x2="${W - 6}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="rgba(255,255,255,0.05)"/><text x="${pl - 5}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8.5" fill="var(--text-4)">${anaK(v)}</text>`; }).join('')}
+      ${Array.from({ length: pr.ans + 1 }, (_, a) => a).filter(a => a % (pr.ans > 10 ? 5 : 1) === 0).map(a => `<text x="${X(a * 12).toFixed(1)}" y="${Hh - 6}" text-anchor="middle" font-size="8.5" fill="var(--text-4)">${+today.slice(0, 4) + a}</text>`).join('')}
+      <path d="${bezierPath(pts(PJ.actifs))}" fill="none" stroke="#60A5FA" stroke-width="1.6" stroke-dasharray="4 3"/>
+      ${H && H.sansPrets ? '' : `<path d="${bezierPath(pts(dettesProj.map(v => -v)))}" fill="none" stroke="#EF4444" stroke-width="1.6" stroke-dasharray="4 3"/>`}
+      <path d="${bezierPath(pts(PJ.net))}" fill="none" stroke="#34D399" stroke-width="2.4"/>
+    </svg><div class="ev-legend"><span class="ev-chip" style="cursor:default"><i style="background:#34D399"></i>${H && H.sansPrets ? 'Total' : 'Net'}</span><span class="ev-chip" style="cursor:default"><i style="background:#60A5FA"></i>Actifs bruts</span>${H && H.sansPrets ? '' : '<span class="ev-chip" style="cursor:default"><i style="background:#EF4444"></i>Dettes</span>'}</div>`;
+  })();
+  const jalons = [1, 5, 10, 15, 20, 25].filter(a => a <= pr.ans);
+  const projTable = impTable(['Dans', 'Net', 'Actifs bruts', 'Dettes'], jalons.map(a => `<tr><td>${a} an${a > 1 ? 's' : ''} (${+today.slice(0, 4) + a})</td>
+      <td style="text-align:right;font-weight:700">${fmtE(PJ.net[a * 12])} €</td><td style="text-align:right">${fmtE(PJ.actifs[a * 12])} €</td><td style="text-align:right">${fmtE(dettesProj[a * 12])} €</td></tr>`));
+  const projForm = `<div class="form-grid">
+      ${impField('Horizon', `<select class="form-select" onchange="anaSetProj('ans', this.value)">${[5, 10, 15, 20, 25].map(a => `<option value="${a}" ${pr.ans === a ? 'selected' : ''}>${a} ans</option>`).join('')}</select>`)}
+      ${impField('Épargne mensuelle (€)', `<input class="form-input" type="number" step="10" value="${pr.epargne == null ? '' : pr.epargne}" placeholder="auto : ${epAuto}" onchange="anaSetProj('epargne', this.value)">`)}
+      ${impField('Placée sur', `<select class="form-select" onchange="anaSetProj('vers', this.value)">${PAT_CLASSES.slice(0, 5).map(([k, l]) => `<option value="${k}" ${pr.vers === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+      ${impField('Engagements VEFA', `<label style="font-size:0.75rem;color:var(--text-2);display:flex;gap:6px;align-items:center"><input type="checkbox" ${pr.engagements ? 'checked' : ''} onchange="anaSetProj('engagements', this.checked)"> appels restants payés</label>`)}
+    </div>
+    <div style="font-size:0.66rem;color:var(--text-4);margin:8px 0 4px">Rendement annuel supposé par classe (%)</div>
+    <div class="form-grid" style="grid-template-columns:repeat(auto-fill,minmax(110px,1fr))">${PAT_CLASSES.map(([k, l]) => impField(l, `<input class="form-input" type="number" step="0.5" value="${pr.rend[k]}" onchange="anaSetProj('rend', this.value, '${k}')">`)).join('')}</div>`;
+  const projection = projForm + `<div style="margin-top:10px">${projSvg}</div>` + projTable
+    + note(`Épargne de ${fmtE(ep)} €/mois${pr.epargne == null ? ' (moyenne revenus − dépenses du Budget, 3 derniers mois)' : ''} placée sur ${(PAT_CLASSES.find(c => c[0] === pr.vers) || [, ''])[1]}. Dettes : échéanciers des prêts (un prêt en préfinancement reste à son montant débloqué tant que son début d’amortissement n’est pas saisi)${pr.engagements ? ' + fonds encore à débloquer ; appels VEFA restants comptés tout de suite dans l’immobilier (HT + TVA à récupérer), la part « de votre poche » retirée de la banque' : ''}. Hypothèses constantes : une projection n’est pas une prévision.`);
+
+  // ── 7. Objectifs ──
+  const mesureVal = (m, i) => m === 'net' ? PJ.net[i] : m === 'actifs' ? PJ.actifs[i] : m === 'disponible' ? (i ? null : dispo) : m.startsWith('classe:') ? (PJ.classes[m.slice(7)] || [])[i] : null;
+  const objs = (DATA.objectifs || []).map(o => {
+    // Valeur actuelle réelle (la projection ne sert qu'à estimer la date d'atteinte)
+    const cur = o.mesure === 'disponible' ? dispo : o.mesure === 'net' ? (H && H.sansPrets ? actifs : net) : o.mesure === 'actifs' ? actifs : +P[o.mesure.slice(7)] || 0;
+    const pct = Math.max(0, Math.min(1, o.cible ? cur / o.cible : 0));
+    const serie = o.mesure === 'disponible' ? null : (o.mesure === 'net' ? PJ.net : o.mesure === 'actifs' ? PJ.actifs : PJ.classes[o.mesure.slice(7)]);
+    const i = cur >= o.cible ? 0 : serie ? EmeraudeCore.moisAtteinte(serie, o.cible) : null;
+    const quand = cur >= o.cible ? '✓ atteint' : i == null ? (serie ? `non atteint en ${pr.ans} ans` : 'date non estimée') : `vers ${new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1 + i, 15)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}`;
+    return `<div style="padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:0.78rem"><span><strong style="color:var(--text-1)">${impEsc(o.nom)}</strong> <span style="color:var(--text-4)">· ${impEsc((OBJ_MESURES.find(x => x[0] === o.mesure) || [, o.mesure])[1])}</span></span>
+        <span>${fmtE(cur)} / ${fmtE(o.cible)} € · <strong style="color:${cur >= o.cible ? 'var(--em-bright)' : 'var(--gold-base)'}">${quand}</strong> <a href="#" onclick="anaObjSuppr('${impEsc(o.id)}');return false" style="color:var(--text-4);margin-left:6px" title="Supprimer">✕</a></span></div>
+      <div class="pret-progress" style="margin-top:5px"><div class="pret-bar" style="width:${(pct * 100).toFixed(1)}%"></div></div></div>`;
+  }).join('');
+  const objectifs = (objs || '<div style="font-size:0.75rem;color:var(--text-4)">Aucun objectif. Exemples : patrimoine net de 150 000 €, épargne de précaution de 10 000 €, 50 000 € sur le portefeuille.</div>')
+    + `<div class="form-grid" style="margin-top:10px">${impField('Objectif', '<input id="obj-nom" class="form-input" placeholder="Ex. Épargne de précaution">')}
+      ${impField('Mesure', `<select id="obj-mesure" class="form-select">${OBJ_MESURES.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}
+      ${impField('Montant cible (€)', '<input id="obj-cible" class="form-input" type="number" step="1000">')}</div>
+      <button class="btn btn-em" style="margin-top:6px" onclick="anaObjAjouter()">➕ Ajouter l’objectif</button>`
+    + note('Date estimée d’après la projection ci-dessus (mêmes hypothèses). Les objectifs sont enregistrés dans vos données (tous les appareils).');
+
+  const nbInst = Object.keys(DATA.instantanes || {}).length;
+  root.innerHTML = impCard('🔬 Analyses du patrimoine', `<div style="font-size:0.74rem;color:var(--text-3);line-height:1.6">
+        <strong>Actifs bruts</strong> ${fmtE(actifs)} € (tout ce que vous possédez) − <strong>dettes</strong> ${fmtE(dettes)} € (capital restant dû des prêts) = <strong>patrimoine net</strong> ${fmtE(net)} €.
+        ${H && H.sansPrets ? '<br><span style="color:var(--gold-base)">Option « hors prêts » active : les dettes ne sont pas déduites des totaux.</span>' : ''}</div>`
+      + note(`${nbInst} instantané${nbInst > 1 ? 's' : ''} mensuel${nbInst > 1 ? 's' : ''} enregistré${nbInst > 1 ? 's' : ''} : chaque mois, la dernière valeur vue est figée et remplace l’estimation dans l’historique.`))
+    + impCard('Ratios', ratios)
+    + impCard('D’où vient la variation ?', cascade || '<div style="font-size:0.75rem;color:var(--text-4)">Historique indisponible.</div>')
+    + impCard('Variations mensuelles par classe', heat || '<div style="font-size:0.75rem;color:var(--text-4)">Historique indisponible.</div>')
+    + impCard('Performance vs apports', perfHtml)
+    + impCard('Taux d’épargne mensuel', epargne)
+    + impCard('Comparaison au CAC 40', cac)
+    + impCard('Projection', projection)
+    + impCard('🎯 Objectifs', objectifs);
 }
 
 // ......................................
@@ -9173,21 +9671,19 @@ function render() {
   buildLine(DATA.sparklines.crypto,       'sp-crypto',       160, 38, 3, 'sp-crypto-rng');
 
   // Evolution chart
-  buildArea(DATA.evolution, 'ev-area','ev-line','ev-dots', 540, 130, 8, 'ev-yaxis');
-  document.getElementById('ev-labs').innerHTML =
-    DATA.monthLabels.map(m=>`<span>${m}</span>`).join('');
+  renderEvolution();
 
   // Donut
   const net = P.total;
   buildDonut([
-    { l:'Immobilier',   v: P.immobilier },
-    { l:'Portefeuille', v: P.portefeuille },
-    { l:'Banque',       v: P.banque },
-    { l:'Crypto',       v: P.crypto },
-    { l:'Liquidités',   v: P.cash },
-    { l:'Métaux',       v: P.metaux },
-    { l:'Biens',        v: P.biens || 0 },
-    { l:'Business',     v: P.business || 0 },
+    { l:'Immobilier',   v: P.immobilier, c: PAT_COULEUR.immobilier },
+    { l:'Portefeuille', v: P.portefeuille, c: PAT_COULEUR.portefeuille },
+    { l:'Banque',       v: P.banque, c: PAT_COULEUR.banque },
+    { l:'Crypto',       v: P.crypto, c: PAT_COULEUR.crypto },
+    { l:'Liquidités',   v: P.cash, c: PAT_COULEUR.cash },
+    { l:'Métaux',       v: P.metaux, c: PAT_COULEUR.metaux },
+    { l:'Biens',        v: P.biens || 0, c: PAT_COULEUR.biens },
+    { l:'Business',     v: P.business || 0, c: PAT_COULEUR.business },
   ], 'donut-slices','donut-legend');
 
   // Transactions
@@ -11460,7 +11956,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261112-1257-3afdc23';
+const APP_BUILD = '20261112-1343-e6e1460';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
