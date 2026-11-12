@@ -1687,6 +1687,9 @@ html, body {
           </div>
         </div>
 
+        <!-- Alertes (VEFA : reste de sa poche ; relais TVA) -->
+        <div id="dash-alertes" style="display:none;margin-bottom:18px"></div>
+
         <!-- Stats row -->
         <div class="grid-3" style="margin-bottom:18px">
 
@@ -2314,8 +2317,111 @@ function pretSetDeb(id, i, field, v) {
   p.deblocages[i][field] = field === 'montant' ? (parseFloat(v) || 0) : v;
   saveData(); renderEmprunts();
 }
-function pretAddDeb(id) { const p = pretFind(id); if (!p) return; (p.deblocages = p.deblocages || []).push({ date: todayISO(), montant: 0 }); saveData(); renderEmprunts(); }
+function pretAddDeb(id) { const p = pretFind(id); if (!p) return; (p.deblocages = p.deblocages || []).push({ date: todayISO(), montant: 0, source: 'constate' }); saveData(); renderEmprunts(); }
 function pretDelDeb(id, i) { const p = pretFind(id); if (!p) return; p.deblocages.splice(i, 1); saveData(); renderEmprunts(); }
+function pretSetEchBanque(id, field, v) {
+  const p = pretFind(id); if (!p) return;
+  p.echeanceBanque = Object.assign({ date: '', montant: 0 }, p.echeanceBanque);
+  p.echeanceBanque[field] = field === 'montant' ? (parseFloat(String(v).replace(',', '.')) || 0) : v;
+  saveData(); renderEmprunts();
+}
+function pretBanqueColler(id) {
+  const p = pretFind(id); if (!p) return;
+  const r = EmeraudeCore.parseEcheancierBanque(document.getElementById('pret-banque-' + id)?.value || '');
+  if (!r.lignes.length) { alert('Aucune échéance lue. Une ligne par échéance : date ; capital ; intérêts ; assurance ; intérêts reportés (facultatif).'); return; }
+  if (!confirm(`${r.lignes.length} échéance(s) lue(s)${r.erreurs.length ? ` — lignes ignorées : ${r.erreurs.join(', ')}` : ''}.\n\nRemplacer le calcul de l’appli par ce tableau de la banque ?`)) return;
+  p.echeancierBanque = r.lignes; saveData(); renderEmprunts();
+}
+function pretBanqueEffacer(id) { const p = pretFind(id); if (!p || !confirm('Revenir au calcul de l’appli (le tableau de la banque est effacé) ?')) return; delete p.echeancierBanque; saveData(); renderEmprunts(); }
+const PRET_SOURCES = { constate: ['constaté', 'var(--em-bright)', 'rgba(16,185,129,0.12)'], deduit: ['déduit · à confirmer', 'var(--gold-base)', 'rgba(218,165,32,0.12)'] };
+const pretSourceBadge = s => { const x = PRET_SOURCES[s] || PRET_SOURCES.constate; return `<span style="font-size:0.6rem;padding:1px 7px;border-radius:9px;color:${x[1]};background:${x[2]};white-space:nowrap">${x[0]}</span>`; };
+const joursAvant = iso => Math.round((Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) - Date.UTC(+todayISO().slice(0, 4), +todayISO().slice(5, 7) - 1, +todayISO().slice(8, 10))) / 86400000);
+
+// Bien immobilier financé par un prêt (et, pour un relais TVA, le bien dont il avance la TVA)
+const pretBien = pret => (DATA.immobilierBiens || []).find(b => (b.pretIds || []).includes(pret.id) || (b.tva || {}).pretId === pret.id) || null;
+// Prêts relais TVA in fine : la TVA remboursée par l'État doit couvrir le capital à l'échéance finale
+function relaisTvaAlertes() {
+  const today = todayISO();
+  return (DATA.prets || []).filter(p => p.usage === 'tva' || (DATA.immobilierBiens || []).some(b => (b.tva || {}).pretId === p.id)).map(p => {
+    const l = EmeraudeCore.loanAt(p, today);
+    if (!l.finale || l.finale.date < today) return null;
+    const b = pretBien(p);
+    const recup = b && b.vefa ? (b.vefa.tvaRecuperee || []).reduce((s, r) => s + (+r.montant || 0), 0) : 0;
+    return { pret: p, bien: b, finale: l.finale, jours: joursAvant(l.finale.date), recup, manque: Math.max(0, l.finale.capital - recup), l };
+  }).filter(Boolean);
+}
+function relaisTvaHtml(x) {
+  const urgent = x.manque > 0 && x.jours <= 150;
+  return `<div style="font-size:0.72rem;padding:9px 12px;border-radius:8px;margin-top:8px;border:1px solid ${urgent ? 'rgba(239,68,68,0.35)' : 'rgba(218,165,32,0.25)'};background:${urgent ? 'rgba(239,68,68,0.07)' : 'rgba(218,165,32,0.06)'}">
+    ${urgent ? '⚠' : '⏳'} <strong>${impEsc(x.pret.nom || 'Prêt relais TVA')}</strong> : remboursement final de <strong>${fmtE(x.finale.montant)} €</strong> le ${EmeraudeCore.isoToFr(x.finale.date)} (dans ${x.jours} jours).
+    ${x.manque > 0 ? `TVA remboursée par l’État à ce jour : ${fmtE(x.recup)} € — il manque <strong>${fmtE(x.manque)} €</strong> pour solder le capital${x.bien ? ` (saisir les remboursements dans Immobilier › ${impEsc(x.bien.nom)} › Suivi TVA)` : ''}.` : '✓ TVA remboursée suffisante pour solder le capital.'}</div>`;
+}
+
+// Suivi : jauge débloqué / reste, frise des déblocages (liés aux appels de fonds VEFA), échéance annoncée par la banque, in fine
+function pretSuiviCard(pret) {
+  const l = EmeraudeCore.loanAt(pret, todayISO());
+  const C = +pret.capitalEmprunte || 0;
+  const sec = (t, body) => `<div class="immo-sec" style="margin-top:14px"><div class="immo-sec-t">${t}</div>${body}</div>`;
+  let html = '';
+  const deb = (pret.deblocages || []).map((d, i) => Object.assign({ i }, d)).filter(d => d.date).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  if (deb.length) {
+    const pct = C ? Math.min(100, l.debloqueTotal / C * 100) : 0;
+    const jauge = `<svg viewBox="0 0 400 22" preserveAspectRatio="none" style="width:100%;height:22px;display:block" role="img" aria-label="Fonds débloqués">
+        <rect x="0" y="4" width="400" height="14" rx="7" fill="rgba(148,163,184,0.14)"/>
+        <rect x="0" y="4" width="${(pct * 4).toFixed(1)}" height="14" rx="7" fill="var(--em-bright, #10B981)"/></svg>
+      <div style="display:flex;justify-content:space-between;font-size:0.68rem;color:var(--text-3);margin-top:3px;flex-wrap:wrap;gap:6px">
+        <span>Débloqué <strong style="color:var(--text-1)">${fmtE(l.debloqueTotal)} €</strong> (${Math.round(pct)} %)</span>
+        <span>Reste à débloquer <strong style="color:var(--gold-base)">${fmtE(l.resteADebloquer)} €</strong></span><span>Emprunté ${fmtE(C)} €</span></div>`;
+    // Appels de fonds VEFA payés rattachés au déblocage le plus proche (± 45 jours)
+    const b = pretBien(pret);
+    const appels = b && b.vefa ? EmeraudeCore.vefaPlan(b.vefa).filter(x => x.paye && x.date) : [];
+    const lies = deb.map(() => []);
+    appels.forEach(a => {
+      let best = -1, dist = 46;
+      deb.forEach((d, k) => { const j = Math.abs(joursAvant(a.date) - joursAvant(EmeraudeCore.toISO(d.date))); if (j < dist) { dist = j; best = k; } });
+      if (best >= 0) lies[best].push(a);
+    });
+    const d0 = EmeraudeCore.toISO(deb[0].dateDemande || deb[0].date), d1 = EmeraudeCore.toISO(deb[deb.length - 1].date);
+    const span = Math.max(30, joursAvant(d1) - joursAvant(d0));
+    const W = 600, X = iso => 30 + (joursAvant(EmeraudeCore.toISO(iso)) - joursAvant(d0)) / span * (W - 60);
+    const frise = `<svg viewBox="0 0 ${W} 78" style="width:100%;height:auto;display:block;margin:4px 0 8px" role="img" aria-label="Frise des déblocages">
+        <line x1="20" x2="${W - 20}" y1="44" y2="44" stroke="rgba(148,163,184,0.3)"/>
+        ${deb.map((d, k) => { const x = X(d.date), xd = d.dateDemande ? X(d.dateDemande) : x, col = (PRET_SOURCES[d.source] || PRET_SOURCES.constate)[1];
+          return `<line x1="${xd.toFixed(1)}" x2="${x.toFixed(1)}" y1="44" y2="44" stroke="${col}" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="${x.toFixed(1)}" cy="44" r="6" fill="${col}"><title>Déblocage ${k + 1} : ${fmtE(d.montant)} € — traité le ${EmeraudeCore.isoToFr(EmeraudeCore.toISO(d.date))}</title></circle>
+            <text x="${x.toFixed(1)}" y="${k % 2 ? 72 : 26}" text-anchor="middle" font-size="10" fill="var(--text-2)">${fmtE(d.montant)} €</text>
+            <text x="${x.toFixed(1)}" y="${k % 2 ? 60 : 14}" text-anchor="middle" font-size="8.5" fill="var(--text-4)">${EmeraudeCore.isoToFr(EmeraudeCore.toISO(d.date))}</text>`; }).join('')}</svg>`;
+    const rows = deb.map((d, k) => {
+      const ap = lies[k], somme = ap.reduce((s, a) => s + a.ttc, 0), ecart = Math.round((+d.montant - somme) * 100) / 100;
+      return `<tr><td>${k + 1}</td><td style="white-space:nowrap">${d.dateDemande ? EmeraudeCore.isoToFr(EmeraudeCore.toISO(d.dateDemande)) + ' → ' : ''}${EmeraudeCore.isoToFr(EmeraudeCore.toISO(d.date))}</td>
+        <td style="text-align:right;white-space:nowrap;font-weight:600">${fmtE(+d.montant || 0)}</td><td>${pretSourceBadge(d.source)}</td>
+        <td style="font-size:0.7rem">${impEsc(d.objet || '')}${d.ref ? `<div style="color:var(--text-4);font-family:'Courier New',monospace;font-size:0.62rem">${impEsc(d.ref)}</div>` : ''}
+          ${ap.length ? `<div style="color:var(--text-3);font-size:0.66rem">↔ appels ${ap.map(a => impEsc(a.id)).join(' + ')} (${impEsc(b.nom)}) : ${fmtE(somme)} €${Math.abs(ecart) >= 0.01 ? ` · écart ${fmtE(ecart)} € (frais, autre financement…)` : ' ✓'}</div>` : ''}</td></tr>`;
+    });
+    html += sec('Déblocages des fonds', jauge + frise + `<div style="overflow-x:auto">${impTable(['#', 'Demande → traité', 'Montant', 'Origine', 'Objet'], rows)}</div>`
+      + (deb.some(d => d.source === 'deduit') ? '<div style="font-size:0.66rem;color:var(--gold-base);margin-top:6px">Montants « déduits » : calculés (non affichés tels quels par la banque), à confirmer sur les relevés — modifiables dans « Modalités du prêt ».</div>' : ''));
+  }
+  if (pret.modalite === 'in fine' && l.finale) {
+    const j = joursAvant(l.finale.date);
+    html += sec('Prêt in fine' + (pret.differe === 'total' ? ' à différé total' : ''), `
+      ${immoRow('Remboursement final', `${fmtE(l.finale.montant)} € le ${EmeraudeCore.isoToFr(l.finale.date)}${j >= 0 ? ` · dans ${j} jours` : ' · échu'}`, '', true)}
+      ${immoRow('dont capital · intérêts', `${fmtE(l.finale.capital)} € · ${fmtE(l.finale.interets)} €`)}
+      ${pret.differe === 'total' || l.interetsReportes ? immoRow('Intérêts reportés à ce jour', fmtE(l.interetsReportes) + ' €') : ''}
+      ${immoRow('Échéances d’ici là', l.prochaine && l.prochaine.date < l.finale.date ? `${fmtE(l.prochaine.montant)} € le ${EmeraudeCore.isoToFr(l.prochaine.date)}${pret.differe === 'total' ? ' (assurance seule)' : ''}` : '—')}
+      ${immoRow('Coût total (intérêts + assurance)', `${fmtE(l.coutTotal)} € · intérêts ${fmtE(l.totalInterets)} € · assurance ${fmtE(l.totalAssurance)} €`, '', true)}
+      ${relaisTvaAlertes().filter(x => x.pret.id === pret.id).map(relaisTvaHtml).join('')}`);
+  }
+  const eb = pret.echeanceBanque;
+  if (eb && eb.date && +eb.montant) {
+    const r = l.rows.find(x => x.date === EmeraudeCore.toISO(eb.date));
+    const calc = r ? Math.round((r.interets + r.capital + r.assurance) * 100) / 100 : null;
+    html += sec('Échéance annoncée par la banque', immoRow(`Le ${EmeraudeCore.isoToFr(EmeraudeCore.toISO(eb.date))}`, fmtE(+eb.montant) + ' €', '', true)
+      + immoRow('Calcul de l’appli à cette date', calc == null ? 'aucune échéance calculée à cette date' : fmtE(calc) + ' €')
+      + (calc != null && Math.abs(calc - eb.montant) >= 0.01 ? `<div style="font-size:0.66rem;color:var(--gold-base);margin-top:4px">Écart de ${fmtE(Math.round((eb.montant - calc) * 100) / 100)} € : assurance, intérêts calculés au jour près par la banque, ou nature de l’échéance (intérêts seuls / amortissement) à vérifier sur le contrat.</div>` : ''));
+  }
+  if ((pret.deblocages || []).length && (!+pret.tauxAnnuel || !+pret.dureeMois)) html += `<div style="font-size:0.72rem;color:var(--gold-base);margin-top:10px">Données du contrat à compléter (taux, durée) : pas de projection d’amortissement.</div>`;
+  return html;
+}
 function pretModalitesCard(pret) {
   const l = EmeraudeCore.loanAt(pret, todayISO());
   const deb = pret.deblocages || [];
@@ -2326,16 +2432,30 @@ function pretModalitesCard(pret) {
     <div class="form-grid">
       ${impField('Type', sel('modalite', [['', 'Amortissable'], ['in fine', 'In fine (capital à la fin)']], pret.modalite === 'in fine' ? 'in fine' : ''))}
       ${impField('Usage', sel('usage', [['', 'Financement du bien'], ['tva', 'Relais TVA (remboursé par l’État)']], pret.usage))}
+      ${pret.modalite === 'in fine' ? impField('Intérêts', sel('differe', [['', 'Payés chaque mois'], ['total', 'Différé total (payés à la fin)']], pret.differe)) : ''}
       ${impField('Jour des échéances', `<input class="form-input" type="number" min="1" max="28" value="${+pret.jourEcheance || ''}" placeholder="ex. 5" onchange="pretSet('${id}', 'jourEcheance', this.value)">`)}
       ${impField('Début d’amortissement (1re échéance de capital)', `<input class="form-input" type="date" value="${impEsc(pret.dateDebutAmortissement || '')}" onchange="pretSet('${id}', 'dateDebutAmortissement', this.value)">`)}
     </div>
     <div style="font-size:0.72rem;color:var(--text-2);margin:6px 0 10px">Phase actuelle : <strong>${l.phase}</strong> · restant dû ${fmt(l.crd)}${deb.length ? ` · débloqué ${fmt(l.debloque)} sur ${fmt(pret.capitalEmprunte)} — les intérêts ne portent que sur les fonds débloqués${pret.dateDebutAmortissement ? '' : ' ; amortissement du capital à partir de la date à renseigner ci-dessus'}` : ''}</div>
     <div style="font-size:0.66rem;color:var(--text-4);margin-bottom:6px">Déblocages de fonds (achat en VEFA) — laisser vide pour un prêt versé en une fois</div>
-    ${deb.map((d, i) => `<div class="immo-line" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto">
-      <input class="form-input" type="date" value="${impEsc(d.date)}" onchange="pretSetDeb('${id}', ${i}, 'date', this.value)">
-      <input class="form-input" type="number" step="0.01" value="${+d.montant || 0}" onchange="pretSetDeb('${id}', ${i}, 'montant', this.value)">
-      <button class="btn btn-ghost" style="padding:4px 9px" onclick="pretDelDeb('${id}', ${i})" title="Retirer">✕</button></div>`).join('')}
-    <button class="btn btn-ghost" style="padding:4px 10px" onclick="pretAddDeb('${id}')">➕ Déblocage</button>
+    ${deb.map((d, i) => `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04)"><div class="immo-line" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto">
+      <input class="form-input" type="date" title="Date de la demande" value="${impEsc(d.dateDemande || '')}" onchange="pretSetDeb('${id}', ${i}, 'dateDemande', this.value)">
+      <input class="form-input" type="date" title="Date de traitement (fonds versés)" value="${impEsc(d.date)}" onchange="pretSetDeb('${id}', ${i}, 'date', this.value)">
+      <input class="form-input" type="number" step="0.01" title="Montant" value="${+d.montant || 0}" onchange="pretSetDeb('${id}', ${i}, 'montant', this.value)">
+      <select class="form-select" title="Origine du montant" onchange="pretSetDeb('${id}', ${i}, 'source', this.value)">${Object.entries(PRET_SOURCES).map(([k, x]) => `<option value="${k}" ${(d.source || 'constate') === k ? 'selected' : ''}>${x[0]}</option>`).join('')}</select>
+      <button class="btn btn-ghost" style="padding:4px 9px" onclick="pretDelDeb('${id}', ${i})" title="Retirer">✕</button></div>
+      <div class="immo-line" style="grid-template-columns:minmax(0,1fr) minmax(0,2fr)">
+      <input class="form-input" value="${impEsc(d.ref || '')}" placeholder="Référence du déblocage" onchange="pretSetDeb('${id}', ${i}, 'ref', this.value)">
+      <input class="form-input" value="${impEsc(d.objet || '')}" placeholder="Objet (ex. appels E2 + E3)" onchange="pretSetDeb('${id}', ${i}, 'objet', this.value)"></div></div>`).join('')}
+    ${deb.length ? '<div style="font-size:0.62rem;color:var(--text-4);margin-top:4px">Par ligne : demande, traitement, montant, origine ; puis référence et objet.</div>' : ''}
+    <button class="btn btn-ghost" style="padding:4px 10px;margin-top:4px" onclick="pretAddDeb('${id}')">➕ Déblocage</button>
+    <div style="font-size:0.66rem;color:var(--text-4);margin:14px 0 6px">Prochaine échéance annoncée par la banque (pour comparer avec le calcul)</div>
+    <div class="form-grid">
+      ${impField('Date', `<input class="form-input" type="date" value="${impEsc((pret.echeanceBanque || {}).date || '')}" onchange="pretSetEchBanque('${id}', 'date', this.value)">`)}
+      ${impField('Montant', `<input class="form-input" type="number" step="0.01" value="${+(pret.echeanceBanque || {}).montant || ''}" onchange="pretSetEchBanque('${id}', 'montant', this.value)">`)}</div>
+    <div style="font-size:0.66rem;color:var(--text-4);margin:10px 0 6px">Tableau d’amortissement de la banque ${(pret.echeancierBanque || []).length ? `: <strong style="color:var(--em-bright)">${pret.echeancierBanque.length} échéances utilisées à la place du calcul</strong> <a href="#" onclick="pretBanqueEffacer('${id}');return false" style="color:#FCA5A5">effacer</a>` : '(facultatif) : collez une échéance par ligne — date ; capital ; intérêts ; assurance ; intérêts reportés'}</div>
+    <textarea id="pret-banque-${id}" class="form-input" rows="2" placeholder="05/06/2026;0;0;16,03;44,14"></textarea>
+    <button class="btn btn-ghost" style="padding:4px 10px;margin-top:4px" onclick="pretBanqueColler('${id}')">📋 Utiliser ce tableau</button>
   </div>`;
 }
 function setPretPage(p)  { PRET_UI.tPage = p; renderEmprunts(); }
@@ -2381,10 +2501,14 @@ function renderEmprunts() {
   const cardsHTML = `
   <div class="pret-cards-grid">
     ${DATA.prets.map(p => {
-      const restant  = calcRestantActuel(p);
-      const pct      = Math.round((1 - restant / p.capitalEmprunte) * 100);
-      const mens     = calcMensualite(p.capitalEmprunte, p.tauxAnnuel, p.dureeMois);
-      const assM     = p.capitalEmprunte * (p.tauxAssuranceAnnuel||0) / 100 / 12;
+      const L        = EmeraudeCore.loanAt(p, todayISO());
+      const special  = pretSpecial(p);
+      const restant  = L.crd;
+      const enDeb    = (p.deblocages || []).length > 0 && L.phase === 'préfinancement';
+      const pct      = enDeb ? Math.round(L.debloqueTotal / p.capitalEmprunte * 100) : Math.round((1 - restant / p.capitalEmprunte) * 100);
+      const mens     = special ? (L.prochaine ? L.prochaine.montant : 0) : calcMensualite(p.capitalEmprunte, p.tauxAnnuel, p.dureeMois);
+      const assM     = special ? 0 : p.capitalEmprunte * (p.tauxAssuranceAnnuel||0) / 100 / 12;
+      const infine   = p.modalite === 'in fine' && L.finale && L.finale.date >= todayISO();
       return `
       <div class="c3w" onclick="selectPret('${p.id}')">
         <div class="c3 pret-card${PRET_UI.pretId===p.id?' sel':''}">
@@ -2404,7 +2528,7 @@ function renderEmprunts() {
               <div style="font-size:1rem;font-weight:700;color:#FCA5A5">${fmt(restant)}</div>
             </div>
             <div>
-              <div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-4)">Mensualité</div>
+              <div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-4)">${special ? 'Prochaine échéance' : 'Mensualité'}</div>
               <div style="font-size:1rem;font-weight:700;color:var(--text-1)">${fmt(mens+assM)}</div>
             </div>
             <div>
@@ -2416,8 +2540,9 @@ function renderEmprunts() {
               <div style="font-size:0.95rem;font-weight:700;color:var(--text-2)">${Math.round(p.dureeMois/12)} ans</div>
             </div>
           </div>
-          <div style="font-size:0.62rem;color:var(--text-3);margin-bottom:4px">Remboursé : <strong style="color:var(--em-bright)">${pct}%</strong></div>
+          <div style="font-size:0.62rem;color:var(--text-3);margin-bottom:4px">${enDeb ? `Débloqué : <strong style="color:var(--em-bright)">${pct}%</strong> · reste ${fmt(L.resteADebloquer)}` : `Remboursé : <strong style="color:var(--em-bright)">${pct}%</strong>`}</div>
           <div class="pret-progress"><div class="pret-bar" style="width:${pct}%"></div></div>
+          ${infine ? `<div style="font-size:0.62rem;color:var(--gold-base);margin-top:6px">⏳ ${fmt(L.finale.montant)} le ${EmeraudeCore.isoToFr(L.finale.date)} (J−${joursAvant(L.finale.date)})</div>` : ''}
         </div>
       </div>`;
     }).join('')}
@@ -2502,6 +2627,7 @@ function renderEmprunts() {
         </div>
         <div class="spark-range" id="pret-ev-range"></div>
         <div style="display:flex;justify-content:space-between;font-size:0.57rem;color:var(--text-4);padding:4px 0" id="pret-ev-labs"></div>
+        ${pretSuiviCard(pret)}
         ${pretModalitesCard(pret)}
         ${pret.notes ? `<div style="font-size:0.72rem;color:var(--text-3);margin-top:12px;padding:10px 14px;background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.1);border-radius:8px">📝 ${pret.notes}</div>` : ''}
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
@@ -4351,8 +4477,10 @@ const EmeraudeCore = (() => {
   //  • préfinancement (VEFA, pret.deblocages) : intérêts seuls sur les fonds déjà débloqués jusqu'à
   //    dateDebutAmortissement (1re échéance d'amortissement), puis amortissement du capital sur dureeMois ;
   //    sans cette date, intérêts seuls jusqu'à `horizon` ;
-  //  • in fine (pret.modalite) : intérêts seuls, capital remboursé à la dernière échéance (ex. relais TVA).
+  //  • in fine (pret.modalite) : intérêts seuls, capital remboursé à la dernière échéance (ex. relais TVA) ;
+  //    avec pret.differe === 'total', les intérêts sont reportés et payés avec le capital à la fin.
   // pret.jourEcheance fixe le jour du mois des échéances (ex. 5).
+  // pret.echeancierBanque (tableau d'amortissement de la banque, facultatif) remplace le calcul.
   function loanSchedule(pret, horizon) {
     const C = +pret.capitalEmprunte || 0, n = +pret.dureeMois || 0;
     const tm = (+pret.tauxAnnuel || 0) / 1200, tAss = (+pret.tauxAssuranceAnnuel || 0) / 1200;
@@ -4361,10 +4489,22 @@ const EmeraudeCore = (() => {
     const deb = deblocages(pret);
     const rows = [];
     if (!C) return rows;
+    const banque = echeancierBanque(pret);
+    if (banque.length) {
+      let rest = C;
+      const ph = pret.modalite === 'in fine' ? 'in fine' : null;
+      return banque.map((r, i) => {
+        rest = round2(Math.max(0, rest - r.capital));
+        return { k: i + 1, date: r.date, interets: r.interets, assurance: r.assurance, capital: r.capital, restant: rest,
+          interetsReportes: r.interetsReportes, phase: ph || (deb.length && !r.capital ? 'préfinancement' : 'amortissement'), banque: true };
+      });
+    }
     if (pret.modalite === 'in fine') {
       const start = toISO(pret.dateDebut);
       if (!n || !start) return rows;
-      for (let k = 1; k <= n; k++) rows.push({ k, date: ech(start, k), interets: C * tm, assurance: C * tAss, capital: k === n ? C : 0, restant: k === n ? 0 : C, phase: 'in fine' });
+      const differe = pret.differe === 'total';
+      for (let k = 1; k <= n; k++) rows.push({ k, date: ech(start, k), interets: differe ? (k === n ? C * tm * n : 0) : C * tm, assurance: C * tAss,
+        capital: k === n ? C : 0, restant: k === n ? 0 : C, interetsReportes: differe && k < n ? C * tm * k : 0, phase: 'in fine' });
       return rows;
     }
     const amortir = (start, first) => {
@@ -4397,6 +4537,27 @@ const EmeraudeCore = (() => {
     return (pret.deblocages || []).map(d => ({ date: toISO(d.date), montant: +d.montant || 0 }))
       .filter(d => d.date && d.montant).sort((a, b) => a.date.localeCompare(b.date));
   }
+  // Tableau d'amortissement fourni par la banque : [{date, capital, interets, assurance, interetsReportes}]
+  function echeancierBanque(pret) {
+    return (Array.isArray(pret.echeancierBanque) ? pret.echeancierBanque : [])
+      .map(r => ({ date: toISO(r.date), capital: round2(+r.capital || 0), interets: round2(+r.interets || 0), assurance: round2(+r.assurance || 0),
+        interetsReportes: round2(+r.interetsReportes || 0) }))
+      .filter(r => r.date).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  // Collage du tableau de la banque, une échéance par ligne :
+  // « date ; capital ; intérêts ; assurance [; intérêts reportés cumulés] » (séparateur ; ou tabulation, montants à la française)
+  function parseEcheancierBanque(text) {
+    const lignes = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const out = [], erreurs = [];
+    lignes.forEach((l, i) => {
+      const c = l.split(/\t|;/).map(s => s.trim());
+      const date = toISO(c[0]);
+      if (!date || c.length < 4) { erreurs.push(i + 1); return; }
+      const n = s => { const v = parseNum(s); return v == null || isNaN(v) ? 0 : round2(v); };
+      out.push({ date, capital: n(c[1]), interets: n(c[2]), assurance: n(c[3]), interetsReportes: n(c[4]) });
+    });
+    return { lignes: out.sort((a, b) => a.date.localeCompare(b.date)), erreurs };
+  }
   const debloqueAu = (deb, iso) => round2(deb.filter(d => d.date <= iso).reduce((s, d) => s + d.montant, 0));
 
   // Situation d'un prêt à une date : capital restant dû, phase, coût des 12 prochains mois
@@ -4407,6 +4568,7 @@ const EmeraudeCore = (() => {
     const paid = rows.filter(r => r.date <= today);
     const amort = toISO(pret.dateDebutAmortissement);
     const enPrefinancement = deb.length > 0 && (!amort || today < amort);
+    const extra = {};
     let crd;
     if (!rows.length && !deb.length) crd = C;                                   // prêt incomplet
     else if (enPrefinancement) crd = debloqueAu(deb, today);                    // seuls les fonds débloqués sont dus
@@ -4419,7 +4581,16 @@ const EmeraudeCore = (() => {
     const m = next[0] || rows[0] || { interets: 0, capital: 0, assurance: 0 };
     const phase = pret.modalite === 'in fine' ? 'in fine' : enPrefinancement ? 'préfinancement' : 'amortissement';
     const dernier = rows.length ? rows[rows.length - 1] : null;
-    return { rows, crd: round2(crd), phase, debloque: deb.length ? debloqueAu(deb, today) : C,
+    const debloqueTotal = deb.length ? round2(deb.reduce((s, d) => s + d.montant, 0)) : C;
+    const reportes = paid.length ? round2(paid[paid.length - 1].interetsReportes || 0) : 0;
+    const tot = f => round2(rows.reduce((s, r) => s + (r[f] || 0), 0));
+    const prochaine = rows.find(r => r.date > today) || null;
+    Object.assign(extra, { debloqueTotal, resteADebloquer: deb.length ? round2(Math.max(0, C - debloqueTotal)) : 0, interetsReportes: reportes,
+      coutTotal: round2(tot('interets') + tot('assurance')), totalInterets: tot('interets'), totalAssurance: tot('assurance'),
+      prochaine: prochaine ? { date: prochaine.date, montant: round2(prochaine.interets + prochaine.capital + prochaine.assurance) } : null,
+      finale: dernier ? { date: dernier.date, montant: round2(dernier.interets + dernier.capital + dernier.assurance), capital: round2(dernier.capital), interets: round2(dernier.interets) } : null,
+      banque: rows.some(r => r.banque) });
+    return { ...extra, rows, crd: round2(crd), phase, debloque: deb.length ? debloqueAu(deb, today) : C,
       mensualite: round2(m.interets + m.capital + m.assurance),
       next12: { interets: sum('interets'), assurance: sum('assurance'), capital: sum('capital'), total: round2(sum('interets') + sum('assurance') + sum('capital')) },
       fin: dernier && dernier.phase !== 'préfinancement' ? dernier.date : null, incomplet: !rows.length && !deb.length };
@@ -4527,6 +4698,24 @@ const EmeraudeCore = (() => {
     // VEFA suivie : prix et mobilier HT (TVA récupérée), frais retenus (définitifs sinon provisions) viennent du suivi
     const vs = bien.vefa ? vefaSynthese(bien.vefa, { surface: +bien.surface || 0,
       relais: loans.filter(l => l.tva).reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0) }) : null;
+    // Financement du lot : apport implicite = prix TTC + frais − capitaux empruntés ; effort = prochaines échéances
+    // (capital d'un relais TVA exclu : remboursé par l'État)
+    if (vs) vs.financement = {
+      apportImplicite: round2(vs.prixTTC + vs.fraisTotal - loans.reduce((s, l) => s + (+l.pret.capitalEmprunte || 0), 0)),
+      resteADebloquer: round2(loans.reduce((s, l) => s + (l.resteADebloquer || 0), 0)),
+      effortMensuel: round2(loans.reduce((s, l) => { const r = l.rows.find(x => x.date > today); return s + (r ? r.interets + r.assurance + (l.tva ? 0 : r.capital) : 0); }, 0)) };
+    // De sa poche : appels de fonds restants (dans l'ordre des stades) non couverts par les fonds encore à débloquer
+    if (vs) {
+      let couvert = vs.financement.resteADebloquer, poche = 0, debut = null;
+      vs.stades.forEach(st => {
+        const montant = round2(vs.plan.filter(l => !l.paye && (l.id === st.id || st.mobilier.some(m => m.id === l.id && m.type === l.type))).reduce((s, l) => s + l.ttc, 0));
+        if (!montant) return;
+        const pris = Math.min(couvert, montant);
+        couvert = round2(couvert - pris);
+        if (montant - pris > 0.005) { poche += montant - pris; if (!debut) debut = { id: st.id, stade: st.stade, partiel: pris > 0.005, horsPret: round2(montant - pris) }; }
+      });
+      vs.financement.poche = { montant: round2(poche), debut, surplus: round2(couvert) };
+    }
     const prix = vs ? vs.immo.ht : +bien.prixAchat || 0;
     const frais = { notaire: vs ? vs.fraisTotal : +bien.fraisNotaire || 0, agence: +bien.fraisAgence || 0, travaux: +bien.travaux || 0,
       mobilier: vs ? vs.mobilier.ht : +bien.mobilier || 0, autres: +bien.autresFrais || 0 };
@@ -5210,7 +5399,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese };
 })();
 // IMPORT_CORE_END
 
@@ -5886,7 +6075,7 @@ function calcMensualite(capital, tauxAnnuel, dureeMois) {
 }
 
 // Prêts en préfinancement (VEFA) ou in fine : échéancier du noyau (EmeraudeCore.loanSchedule)
-const pretSpecial = p => (p.deblocages || []).length > 0 || p.modalite === 'in fine';
+const pretSpecial = p => (p.deblocages || []).length > 0 || p.modalite === 'in fine' || (p.echeancierBanque || []).length > 0;
 function calcTableauNoyau(pret) {
   const today = todayISO();
   const all = EmeraudeCore.loanSchedule(pret, EmeraudeCore.toISO(new Date(Date.now() + 2 * 365 * 86400000)));
@@ -7185,7 +7374,7 @@ function vefaPaye(id, list, i, on) {
     const montant = Math.round(base * (+x.pct || 0)) / 100;
     const pret = (DATA.prets || []).find(p => (b.pretIds || []).includes(p.id) && p.usage !== 'tva' && (b.tva || {}).pretId !== p.id
       && Array.isArray(p.deblocages) && p.deblocages.length);
-    if (pret && montant > 0 && !pret.deblocages.some(d => d.date === x.date && Math.abs(d.montant - montant) < 0.01)
+    if (pret && montant > 0 && !pret.deblocages.some(d => d.date === x.date)
       && confirm(`Appel « ${x.stade || x.id} » payé : ${fmtE(montant)} €.\n\nL’ajouter aux fonds débloqués du prêt « ${pret.nom || 'Prêt'} » au ${EmeraudeCore.isoToFr(x.date)} ?\n\nLe préfinancement calcule les intérêts sur les fonds débloqués. Choisissez Annuler si cet appel a été payé sur vos fonds propres.`)) {
       pret.deblocages.push({ date: x.date, montant });
       pret.deblocages.sort((a, c) => String(a.date).localeCompare(String(c.date)));
@@ -7364,6 +7553,15 @@ function vefaDetail(b, a) {
     + immoRow('Financement de la TVA', fin === 'pret' ? `prêt relais ${s.relais ? e(s.relais) : '(montant à lier)'}` : fin === 'fondsPropres' ? 'apport (fonds propres)' : 'non renseigné (Modifier)')
     + immoRow('TVA restant à financer sur fonds propres', e(s.tvaAFinancer), s.tvaAFinancer > 0 ? 'amt-neg' : '', true)
     + '<div style="font-size:0.64rem;color:var(--text-4);margin-top:6px">L’appli suit les montants ; le droit à récupération et le calendrier de remboursement sont à confirmer avec le gestionnaire ou l’expert-comptable.</div>');
+  const F = s.financement || {};
+  const fin2 = sec('Financement du lot', (a.loans.length ? a.loans.map(l => immoRow(impEsc(l.pret.nom || 'Prêt') + (l.tva ? ' (relais TVA)' : ''),
+        (l.pret.deblocages || []).length ? `débloqué ${immoEur(l.debloqueTotal)} / ${immoEur(l.pret.capitalEmprunte)} · reste ${immoEur(l.resteADebloquer)}` : `${immoEur(l.pret.capitalEmprunte)}${l.finale ? ' · in fine le ' + EmeraudeCore.isoToFr(l.finale.date) : ''}`)).join('')
+      : '<div style="font-size:0.72rem;color:var(--text-4)">Aucun prêt lié (Modifier › Financement).</div>')
+    + immoRow('Reste à débloquer', immoEur(F.resteADebloquer))
+    + immoRow('Apport implicite (prix TTC + frais − emprunts)', e(F.apportImplicite), '', true)
+    + immoRow('Effort mensuel (prochaines échéances)', e(F.effortMensuel) + '/mois', F.effortMensuel ? 'amt-neg' : '')
+    + (F.poche ? immoRow('À financer de votre poche', e(F.poche.montant), F.poche.montant > 0.005 ? 'amt-neg' : 'amt-pos', true) + vefaPocheHtml('', F.poche) : '')
+    + relaisTvaAlertes().filter(x => x.bien && x.bien.id === b.id).map(relaisTvaHtml).join(''));
   const pieces = sec('Pièces du dossier', (v.pieces || []).length ? `<ul style="margin:0 0 0 16px;font-size:0.74rem;color:var(--text-2);line-height:1.7">${v.pieces.map(x => `<li>${impEsc(x)}</li>`).join('')}</ul>`
     : '<div style="font-size:0.72rem;color:var(--text-4)">Aucune pièce listée (Modifier › Suivi VEFA).</div>');
   // Appels de fonds : le mobilier est regroupé sous l'appel immobilier du même stade
@@ -7387,7 +7585,40 @@ function vefaDetail(b, a) {
   return `<div class="immo-sec" style="margin-top:12px"><div class="immo-sec-t">VEFA : appels de fonds</div>${ecart}
       <div style="font-size:0.66rem;color:var(--text-4);margin-bottom:6px">Cochez un appel quand il est payé et saisissez sa date (dates futures : selon l’avancement du chantier). Les lignes liserées d’or tombent au même stade.</div>
       <div style="overflow-x:auto">${impTable(['', 'Stade', '%', 'TTC', 'HT', 'TVA', 'Payé', 'Date'], rows)}</div></div>
-    <div class="immo-grid" style="margin-top:12px">${lot}${tva}${frais}${pieces}</div>`;
+    <div class="immo-grid" style="margin-top:12px">${lot}${fin2}${tva}${frais}${pieces}</div>`;
+}
+
+// « De votre poche » : appels de fonds restants non couverts par les prêts (fonds encore à débloquer)
+function vefaPocheHtml(nom, po, opts) {
+  opts = opts || {};
+  if (!po) return '';
+  const ok = po.montant < 0.005;
+  const quand = po.debut ? (po.debut.partiel ? `en partie dès ${impEsc(po.debut.id)} (${impEsc(po.debut.stade)}), puis les appels suivants` : `à partir de ${impEsc(po.debut.id)} (${impEsc(po.debut.stade)})`) : '';
+  return `<div style="font-size:0.74rem;padding:9px 12px;border-radius:8px;margin-top:8px;border:1px solid ${ok ? 'rgba(16,185,129,0.3)' : 'rgba(218,165,32,0.35)'};background:${ok ? 'rgba(16,185,129,0.06)' : 'rgba(218,165,32,0.07)'}">
+    ${ok ? `✓ ${nom ? '<strong>' + impEsc(nom) + '</strong> : ' : ''}les fonds encore à débloquer couvrent tous les appels restants${po.surplus > 0.005 ? ` (excédent de prêt ${fmtE(po.surplus)} €)` : ''}.`
+      : `💶 ${nom ? '<strong>' + impEsc(nom) + '</strong> : ' : ''}<strong>${fmtE(po.montant)} €</strong> à financer de votre poche pour compléter les prêts — ${quand}.`}
+    ${opts.note === false || ok ? '' : '<div style="font-size:0.64rem;color:var(--text-4);margin-top:3px">Appels restants TTC (TVA comprise, avancée puis remboursée par l’État) − fonds encore à débloquer ; hors régularisation des frais de notaire.</div>'}</div>`;
+}
+function dashAlertes() {
+  const el = document.getElementById('dash-alertes');
+  if (!el) return;
+  let html = '';
+  try {
+    const biens = (DATA.immobilierBiens || []).filter(b => b.vefa);
+    if (biens.length) {
+      const G = EmeraudeCore.immoGlobal(biens, { prets: DATA.prets || [], accounts: [], today: todayISO(), tmi: 0 });
+      const items = G.items.filter(a => a.vefa && a.vefa.financement && a.vefa.financement.poche && a.vefaEnCours);
+      const tot = items.reduce((s, a) => s + a.vefa.financement.poche.montant, 0);
+      if (items.length) html += `<div style="font-size:0.78rem;padding:11px 14px;border-radius:10px;border:1px solid rgba(218,165,32,0.35);background:rgba(218,165,32,0.07);cursor:pointer" onclick="document.querySelector('.nav-item[data-page=&quot;immobilier&quot;]')?.click()" title="Voir le détail dans Immobilier">
+        ${tot > 0.005 ? `💶 <strong>${fmtE(tot)} €</strong> à financer de votre poche pour compléter les prêts des appartements en VEFA`
+          : '✓ Appartements en VEFA : les fonds encore à débloquer couvrent tous les appels restants'}
+        <span style="color:var(--text-3)">${items.map(a => ` · ${impEsc(a.nom)} ${fmtE(a.vefa.financement.poche.montant)} €`).join('')}</span>
+        <span style="color:var(--em-bright);margin-left:6px">Détail ›</span></div>`;
+    }
+    html += relaisTvaAlertes().filter(x => x.manque > 0).map(relaisTvaHtml).join('');
+  } catch (e) { html = ''; }
+  el.innerHTML = html;
+  el.style.display = html ? '' : 'none';
 }
 
 // Décaissement cumulé par stade (SVG, courbes de Bézier) : trait plein = payé, pointillé = à venir
@@ -7449,7 +7680,16 @@ function vefaOverview(list, G) {
       ${vals.map(st => `<td style="text-align:right;white-space:nowrap">${st ? fmtE(st.ttc) : '—'}</td>`).join('')}
       <td style="text-align:right;white-space:nowrap;font-weight:600">${fmtE(tot)}</td><td style="text-align:center">${ok ? '<span class="amt-pos">✓ payé</span>' : '<span style="color:var(--text-4)">à venir</span>'}</td></tr>`;
   });
-  return impCard('🏗 VEFA : avancement des paiements', head + kpis
+  const fin = its.reduce((o, x) => { const f = x.a.vefa.financement || {}; o.apport += f.apportImplicite || 0; o.reste += f.resteADebloquer || 0; o.effort += f.effortMensuel || 0; o.poche += f.poche ? f.poche.montant : 0; return o; }, { apport: 0, reste: 0, effort: 0, poche: 0 });
+  const kpis2 = `<div class="immo-kpis" style="margin-top:10px">
+      ${tile('Reste à débloquer (prêts)', immoEur(fin.reste), 'fonds encore à verser par la banque')}
+      ${tile('Apport implicite', immoEur(fin.apport), 'prix TTC + frais − emprunts')}
+      ${tile('Effort mensuel', fmtE(fin.effort) + ' €', 'prochaines échéances des prêts', fin.effort ? 'amt-neg' : '')}
+      ${tile('De votre poche', immoEur(fin.poche), 'appels restants − fonds à débloquer', fin.poche > 0.005 ? 'amt-neg' : 'amt-pos')}</div>`
+    + its.map(x => vefaPocheHtml(x.b.nom, (x.a.vefa.financement || {}).poche, { note: false })).join('')
+    + (fin.poche > 0.005 ? '<div style="font-size:0.64rem;color:var(--text-4);margin-top:4px">Appels restants TTC (TVA comprise, avancée puis remboursée par l’État) − fonds encore à débloquer ; hors régularisation des frais de notaire.</div>' : '')
+    + relaisTvaAlertes().filter(x => x.bien && its.some(y => y.b.id === x.bien.id)).map(relaisTvaHtml).join('');
+  return impCard('🏗 VEFA : avancement des paiements', head + kpis + kpis2
     + `<div style="margin-top:12px">${vefaChart(its)}</div>`
     + `<div style="overflow-x:auto;margin-top:10px">${impTable(['', 'Stade'].concat(its.map(x => impEsc(x.b.nom) + ' (TTC)'), ['Total', 'Statut']), rows)}</div>`);
 }
@@ -8908,6 +9148,7 @@ function render() {
   // Hero
   document.getElementById('heroVal').textContent = fmt(P.total);
   heroPretsInfo(P);
+  dashAlertes();
   buildArea(DATA.evolution, 'hero-area','hero-line', null, 210, 65, 5);
 
   // Stats
@@ -11219,7 +11460,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261112-1222-9a26439';
+const APP_BUILD = '20261112-1248-c8e3e77';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
