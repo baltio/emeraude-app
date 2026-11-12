@@ -4039,7 +4039,7 @@ const EmeraudeCore = (() => {
     id: 'emeraude-json', label: 'Fichier de données Émeraude (JSON) — fusion', kind: 'json',
     detect: f => f.json && typeof f.json === 'object' && !Array.isArray(f.json) && (['banks', 'portefeuille', 'cryptoWallets', 'revenus'].some(k => k in f.json)
       // fichier partiel (ex. fiches immobilières seules) : reconnu s'il porte la version du format Émeraude
-      || ('schemaVersion' in f.json && ['immobilierBiens', 'prets', 'budget'].some(k => k in f.json))) ? 0.99 : 0,
+      || ('schemaVersion' in f.json && ['immobilierBiens', 'prets', 'budget', 'employeurs', 'objectifs'].some(k => k in f.json))) ? 0.99 : 0,
     parse: f => [{ kind: 'json', data: f.json }]
   });
 
@@ -4338,6 +4338,7 @@ const EmeraudeCore = (() => {
     ['liquidites', 'Liquidités'], ['placements_banque', 'Placements'], ['prets', 'Crédits'], ['immobilierBiens', 'Immobilier'],
     ['biens', 'Biens personnels'], ['metaux', 'Métaux précieux'], ['businessActifs', 'Actifs business'], ['factures', 'Factures'],
     ['budget', 'Budget'], ['vehicules', 'Véhicules'], ['transactions', 'Opérations récentes (tableau de bord)'],
+    ['employeurs', 'Employeurs (salaires détectés)'], ['objectifs', 'Objectifs'],
   ];
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
   function mergeById(a, b, mergeItem) {
@@ -4894,6 +4895,68 @@ const EmeraudeCore = (() => {
     const actifs = dates.map((_, i) => round2(PATRIMOINE_CLASSES.reduce((s, k) => s + classes[k][i], 0)));
     const net = actifs.map((v, i) => round2(v - (opts.sansPrets ? 0 : dettes[i])));
     return { dates, classes, actifs, dettes, net, exact, sansPrets: !!opts.sansPrets };
+  }
+
+  // ── Salaires détectés dans les relevés bancaires ──
+  // data.employeurs = [{ id, motif (texte du libellé, casse et accents ignorés), source (nom dans Salaire & Revenus) }].
+  // Chaque virement reçu d'un employeur devient un revenu lié au virement (txnId, auto). Un revenu déjà saisi
+  // ou importé sans lien (ex. tableau mensuel de salaires) « couvre » les virements à ±20 jours dont la somme
+  // lui est égale (5 centimes près, jusqu'à 4 virements) : pas de doublon. Virement disparu (import annulé) →
+  // revenu automatique retiré. Les motifs sont ajoutés aux mots-clés de la catégorie Salaire du Budget.
+  const hashCourt = s => { let h = 5381; for (const ch of String(s)) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0; return h.toString(36); };
+  function detecterSalaires(data) {
+    data.revenus = data.revenus || [];
+    const regles = (data.employeurs || []).filter(e => e && String(e.motif || '').trim() && String(e.source || '').trim());
+    const res = { ajoutes: [], retires: [], couverts: 0, motsCles: 0 };
+    if (!regles.length) return res;
+    const N = s => normText(s).toUpperCase().replace(/\s+/g, ' ').trim();
+    const cands = [];
+    (data.banks || []).forEach(b => (b.accounts || []).forEach(a => (a.txns || []).forEach((tx, i) => {
+      if (!(+tx.amt > 0)) return;
+      const txt = N(texteOp(tx));
+      const r = regles.find(e => txt.includes(N(e.motif)));
+      const date = txnDate(tx);
+      if (r && date) cands.push({ tx, acc: a, regle: r, date, id: tx.id || `${a.id}|${date}|${round2(+tx.amt)}|${i}` });
+    })));
+    const ids = new Set(cands.map(c => c.id));
+    res.retires = data.revenus.filter(r => r.auto && r.txnId && !ids.has(r.txnId));
+    if (res.retires.length) data.revenus = data.revenus.filter(r => !res.retires.includes(r));
+    const lies = new Set(data.revenus.filter(r => r.txnId).map(r => r.txnId));
+    const libres = cands.filter(c => !lies.has(c.id));
+    const couverts = new Set();
+    const jours = (x, y) => Math.abs(Date.parse(x) - Date.parse(y)) / 864e5;
+    // Plus petit groupe de virements (≤ 4, les 8 plus proches de la date) dont la somme égale la cible
+    const couvrir = (d, cible, fenetre) => {
+      const pool = libres.filter(c => !couverts.has(c.id) && jours(c.date, d) <= fenetre).sort((a, b) => jours(a.date, d) - jours(b.date, d)).slice(0, 8);
+      let best = 0, bestN = 9;
+      for (let m = 1; m < (1 << pool.length); m++) {
+        let n = 0, s = 0;
+        for (let i = 0; i < pool.length; i++) if (m & (1 << i)) { n++; s += +pool[i].tx.amt; }
+        if (n <= 4 && n < bestN && Math.abs(s - cible) <= 0.05) { best = m; bestN = n; }
+      }
+      pool.forEach((c, i) => { if (best & (1 << i)) couverts.add(c.id); });
+      return best > 0;
+    };
+    const sansLien = data.revenus.filter(r => !r.txnId && toISO(r.date)).sort((a, b) => toISO(a.date).localeCompare(toISO(b.date)));
+    const seuls = sansLien.filter(r => !couvrir(toISO(r.date), round2(+r.montant || 0), 20));
+    // 2e passe : deux mois consécutifs d'une même source (une prime rattachée à l'autre mois) : total identique
+    for (let i = 0; i + 1 < seuls.length; i++) {
+      const a = seuls[i], b = seuls[i + 1];
+      if (normText(a.source) !== normText(b.source) || jours(toISO(a.date), toISO(b.date)) > 40) continue;
+      const milieu = new Date((Date.parse(toISO(a.date)) + Date.parse(toISO(b.date))) / 2).toISOString().slice(0, 10);
+      if (couvrir(milieu, round2((+a.montant || 0) + (+b.montant || 0)), 40)) i++;
+    }
+    res.couverts = couverts.size;
+    res.ajoutes = libres.filter(c => !couverts.has(c.id)).map(c => ({ id: 'rev-auto-' + hashCourt(c.id), date: c.date, source: clean(c.regle.source),
+      montant: round2(+c.tx.amt), compte: c.acc.id, notes: clean(c.tx.detail || c.tx.desc || '').slice(0, 90), pj: null, auto: true, txnId: c.id }));
+    if (res.ajoutes.length || res.retires.length)
+      data.revenus = data.revenus.concat(res.ajoutes).sort((x, y) => String(x.date).localeCompare(String(y.date)));
+    const cat = ((data.budget || {}).categories || []).find(c => c.id === 'cat-rev-salaire');
+    if (cat) {
+      cat.motsCles = Array.isArray(cat.motsCles) ? cat.motsCles : [];
+      regles.forEach(e => { if (!cat.motsCles.some(m => N(m) === N(e.motif))) { cat.motsCles.push(clean(e.motif)); res.motsCles++; } });
+    }
+    return res;
   }
 
   // ── Analyses du patrimoine ──
@@ -5552,7 +5615,7 @@ const EmeraudeCore = (() => {
     parseCSV, detectSep, findHeader, headerSignature, guessHeaderRow, readXlsx, unzip, prepareFile, detect, importerById,
     balanceAt, accountRecompute, bankFp, cryptoFp, revenuFp, withDupIndex, applyImport, previewImport, undoImport,
     planMerge, mergeSection, migrate, isSealed, sealText, openSealed, parseDriveLink, oauthReturn, syncPlan, isoWeek,
-    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese, PATRIMOINE_CLASSES, finsDeMois, historiquePatrimoine, instantane, analyseVariations, classerCompte, performanceApports, projeterPatrimoine, moisAtteinte };
+    quoteRange, lastCloseDate, closeAt, applyQuote, fillDailyValues, mergeQuoteHistory, buildInfo, compareVersions, updateStatus, loanSchedule, loanAt, deblocages, echeancierBanque, parseEcheancierBanque, irr, ordresAchat, peaFp, PEA_TYPES, chercherDoublons, supprimerDoublons, doublonProbable, FREQUENCES, occurrences, mensualise, budgetMonth, budgetForecast, categoriser, categoriserOp, cleMarchand, detecterAbonnements, analyserReleve, estCarte, REGLES_MARCHANDS, VEHICULE_TYPES, pleinMontant, vehiculeStats, immoAnalyse, immoGlobal, IMMO_REGIMES, PRELEVEMENTS_SOCIAUX, VEFA_ECHEANCIER_TYPE, vefaNouveau, vefaPlan, vefaSynthese, PATRIMOINE_CLASSES, finsDeMois, historiquePatrimoine, instantane, analyseVariations, classerCompte, performanceApports, projeterPatrimoine, moisAtteinte, detecterSalaires };
 })();
 // IMPORT_CORE_END
 
@@ -5907,6 +5970,7 @@ function ensureDataShape(opts) {
   if (!Array.isArray(DATA.prets)) DATA.prets = [];
   if (!Array.isArray(DATA.placements_banque)) DATA.placements_banque = [];
   if (!Array.isArray(DATA.objectifs)) DATA.objectifs = [];
+  if (!Array.isArray(DATA.employeurs)) DATA.employeurs = [];
   if (!DATA.instantanes || typeof DATA.instantanes !== 'object' || Array.isArray(DATA.instantanes)) DATA.instantanes = {};
 
   if (!DATA.portefeuille || typeof DATA.portefeuille !== 'object' || Array.isArray(DATA.portefeuille)) {
@@ -9111,6 +9175,49 @@ function bienDelete(id) {
 // SALAIRE & REVENUS
 // ......................................
 const SALAIRE_UI = { showForm: false, editId: null };
+// ── Salaires détectés automatiquement (règles employeur → source dans les données : DATA.employeurs) ──
+const SAL_AUTO = { dernier: null };
+function salairesAuto(rendu) {
+  let r;
+  try { r = EmeraudeCore.detecterSalaires(DATA); } catch (e) { console.warn('Détection des salaires :', e); return null; }
+  if (r.ajoutes.length || r.retires.length || r.motsCles) { saveData(); SAL_AUTO.dernier = r; if (rendu) rendu(); }
+  return r;
+}
+function salEmpAjouter() {
+  const motif = document.getElementById('emp-motif')?.value.trim(), source = document.getElementById('emp-source')?.value.trim();
+  if (!motif || !source) { alert('Texte du virement et nom du revenu obligatoires (ex. « ACME SAS » → « Salaire ACME »).'); return; }
+  (DATA.employeurs = DATA.employeurs || []).push({ id: 'emp-' + Date.now().toString(36), motif, source });
+  saveData();
+  const r = salairesAuto();
+  SAL_AUTO.dernier = r; renderSalaire();
+}
+function salEmpSuppr(id) {
+  if (!confirm('Retirer cet employeur ? Les revenus déjà détectés restent (supprimables un par un).')) return;
+  DATA.employeurs = (DATA.employeurs || []).filter(e => e.id !== id);
+  saveData(); renderSalaire();
+}
+function salDetecter() { SAL_AUTO.dernier = salairesAuto() || { ajoutes: [], retires: [], couverts: 0, motsCles: 0 }; renderSalaire(); }
+function salAutoCard() {
+  const emps = DATA.employeurs || [];
+  const nAuto = (DATA.revenus || []).filter(r => r.auto).length;
+  const d = SAL_AUTO.dernier;
+  return `<div class="c3" style="margin-bottom:16px;padding:16px">
+    <div style="font-size:.92rem;font-weight:700;color:var(--text-1);margin-bottom:4px">🔎 Détection automatique des salaires</div>
+    <div style="font-size:.72rem;color:var(--text-3);margin-bottom:10px">Chaque virement reçu d’un employeur listé ci-dessous (relevés importés) est ajouté ici, une fois. Les salaires déjà présents (ex. tableau mensuel importé) ne sont pas dupliqués. ${nAuto} revenu${nAuto > 1 ? 's' : ''} détecté${nAuto > 1 ? 's' : ''} automatiquement.</div>
+    ${emps.length ? emps.map(e => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:.8rem">
+        <span>Libellé contenant <strong style="color:var(--text-1)">« ${impEsc(e.motif)} »</strong> → <span class="rev-source-tag">${impEsc(e.source)}</span></span>
+        <button class="btn btn-ghost" style="padding:2px 8px;font-size:.72rem;color:#EF4444" onclick="salEmpSuppr('${impEsc(e.id)}')">✕</button></div>`).join('')
+      : '<div style="font-size:.75rem;color:var(--text-4)">Aucun employeur : ajoutez le nom tel qu’il apparaît sur vos virements de salaire.</div>'}
+    <div class="form-grid" style="margin-top:10px">
+      ${impField('Texte du virement', '<input id="emp-motif" class="form-input" placeholder="Ex. NOM DE L’EMPLOYEUR">')}
+      ${impField('Nom du revenu', '<input id="emp-source" class="form-input" placeholder="Ex. Salaire Société X">')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <button class="btn btn-em" onclick="salEmpAjouter()">➕ Ajouter l’employeur</button>
+      <button class="btn btn-ghost" onclick="salDetecter()">🔄 Détecter maintenant</button></div>
+    ${d ? `<div style="font-size:.72rem;color:var(--em-bright);margin-top:8px">${d.ajoutes.length} salaire${d.ajoutes.length > 1 ? 's' : ''} ajouté${d.ajoutes.length > 1 ? 's' : ''}${d.ajoutes.length ? ` (${fmt(d.ajoutes.reduce((s, r) => s + r.montant, 0))})` : ''} · ${d.couverts} virement${d.couverts > 1 ? 's' : ''} déjà compté${d.couverts > 1 ? 's' : ''} dans les salaires existants${d.retires.length ? ` · ${d.retires.length} retiré${d.retires.length > 1 ? 's' : ''} (virement disparu)` : ''}${d.motsCles ? ' · employeur ajouté à la catégorie Salaire du Budget' : ''}</div>` : ''}
+  </div>`;
+}
+
 
 function _allAccountOptions() {
   const opts = [];
@@ -9466,6 +9573,8 @@ function renderStats() {
 function renderSalaire() {
   const root = document.getElementById('salaire-root');
   if (!root) return;
+  const auto = salairesAuto();
+  if (auto && (auto.ajoutes.length || auto.retires.length)) SAL_AUTO.dernier = auto;
   const list = (DATA.revenus || []).slice().sort((a,b) => b.date.localeCompare(a.date));
 
   // Stats
@@ -9543,6 +9652,8 @@ function renderSalaire() {
         ${SALAIRE_UI.showForm ? '✕ Annuler' : '< Nouvelle entrée'}
       </button>
     </div>
+
+    ${salAutoCard()}
 
     <!-- STATS ROW -->
     <div class="stats-row">
@@ -11106,13 +11217,14 @@ function impApply() {
   let e;
   try { e = EmeraudeCore.applyImport(DATA, r, impArgs(id)); }
   catch (err) { alert('Import impossible : ' + (err?.message || err)); return; }
+  const sal = e.kind === 'bank' ? EmeraudeCore.detecterSalaires(DATA) : null;
   if (e.accountId || e.walletId) {
     SETTINGS.importTargets = Object.assign({}, SETTINGS.importTargets, { [impTargetKey(r)]: e.accountId || e.walletId });
     saveSettings();
   }
   saveData();
   render();
-  IMP.msg = `✓ ${c.item.name} → ${e.cible} : ${impSummary(e)}`;
+  IMP.msg = `✓ ${c.item.name} → ${e.cible} : ${impSummary(e)}${sal && sal.ajoutes.length ? ` · ${sal.ajoutes.length} salaire${sal.ajoutes.length > 1 ? 's' : ''} ajouté${sal.ajoutes.length > 1 ? 's' : ''} à Salaire & Revenus` : ''}`;
   if (e.kind === 'bank') IMP.analyse = { accountId: e.accountId, importId: id, fichier: c.item.name };
   // Contrôle après chaque import : doublons restant dans les données
   try { const dbl = EmeraudeCore.chercherDoublons(DATA).filter(g => g.certitude === 'certain'); if (dbl.length) IMP.msg += ` · ⚠ ${dbl.reduce((s, g) => s + g.items.length, 0)} doublon(s) dans vos données : voir « Contrôle des doublons »`; } catch (err) {}
@@ -11956,7 +12068,7 @@ async function fetchFinancialNews() {
 // sur le site. L'appli lit ce version.json peu après l'ouverture, toutes les 30 min et au retour sur la
 // fenêtre ; si la version publiée est plus récente : bandeau « Nouvelle version disponible ».
 // Le fichier de travail (double-clic) garde le marqueur non remplacé : il est comparé au numéro de version.
-const APP_BUILD = '20261112-1343-e6e1460';
+const APP_BUILD = '20261112-1431-7bf2628';
 const APP_PUBLIC_URL = 'https://baltio.github.io/emeraude-app/';
 const IS_HOSTED = /^https?:$/.test(location.protocol);
 const UPD = { res: null, later: false, last: 0, busy: false };
